@@ -3,6 +3,8 @@ module Control.Concurrent.Find
   ( -- * @Find@ monad
     Find
   , runFind
+  , unsafeRunFind
+  , hasResult
   -- * Combinators
   , (!)
   , success, failure
@@ -14,7 +16,8 @@ import Control.Concurrent.Find.Internal
 import Control.Concurrent.STM.CTMVar (newCTMVar)
 import Control.Monad (MonadPlus(..), void, liftM)
 import Control.Monad.Conc.Class (MonadConc, atomically)
-import Data.Maybe (fromJust)
+import Data.Maybe (isJust)
+import System.IO.Unsafe (unsafePerformIO)
 
 -- | A value of type @Find m a@ represents a concurrent search
 -- computation (happening in the 'MonadConc' monad @m@) which may
@@ -49,8 +52,8 @@ instance MonadConc m => Applicative (Find m) where
 
     if success
     then do
-      fres <- fromJust `liftM` result f
-      ares <- fromJust `liftM` result a
+      fres <- unsafeResult f
+      ares <- unsafeResult a
 
       var <- atomically . newCTMVar . Just $ fres ares
       return $ workItem var id
@@ -84,6 +87,26 @@ instance MonadConc m => Alternative (Find m) where
 instance MonadConc m => MonadPlus (Find m) where
   mzero = empty
   mplus = (<|>)
+
+--------------------------------------------------------------------------------
+-- Execution
+
+-- | Execute a 'Find' computation, returning a 'Just' value if there
+-- was at least one result (and a different value may be returned each
+-- time), or 'Nothing' if there are no results.
+runFind :: MonadConc m => Find m a -> m (Maybe a)
+runFind (Find mf) = mf >>= result
+
+-- | Unsafe version of 'runFind'. This will error at runtime if the
+-- computation fails.
+unsafeRunFind :: MonadConc m => Find m a -> m a
+unsafeRunFind (Find mf) = mf >>= unsafeResult
+
+-- | Check if a computation has a result. This will block until a
+-- result is found.
+hasResult :: Find IO a -> Bool
+{-# NOINLINE hasResult #-}
+hasResult f = unsafePerformIO $ isJust `liftM` runFind f
 
 --------------------------------------------------------------------------------
 -- Combinators
@@ -120,12 +143,3 @@ oneOf [] = failure
 oneOf as = Find $ do
   var <- work $ map unFind as
   return $ workItem var id
-
---------------------------------------------------------------------------------
--- Execution
-
--- | Execute a 'Find' computation, returning a 'Just' value if there
--- was at least one result (and a different value may be returned each
--- time), or 'Nothing' if there are no results.
-runFind :: MonadConc m => Find m a -> m (Maybe a)
-runFind (Find mf) = mf >>= result

@@ -7,7 +7,7 @@ import Control.Concurrent.STM.CTMVar (CTMVar, newEmptyCTMVar, newCTMVar, readCTM
 import Control.Monad (liftM)
 import Control.Monad.Conc.Class
 import Control.Monad.STM.Class
-import Data.Maybe (isNothing)
+import Data.Maybe (fromJust, isNothing)
 import Unsafe.Coerce (unsafeCoerce)
 
 --------------------------------------------------------------------------------
@@ -24,9 +24,9 @@ instance Functor (WorkItem m) where
 -- which will then be transformed into a value of type @a@.
 data WorkItem' m x a = WorkItem'
   { _result :: CTMVar (STMLike m) (Maybe x)
-  -- ^ The result of the computation.
+  -- ^ The future result of the computation.
   , _mapped :: x -> a
-  -- ^ A function to change the type.
+  -- ^ Some post-processing to do.
   }
 
 -- | The possible states that a work item may be in.
@@ -35,11 +35,10 @@ data WorkState = StillComputing | HasFailed | HasSucceeded
 
 -- | Construct a 'WorkItem'.
 workItem :: CTMVar (STMLike m) (Maybe x) -> (x -> a) -> WorkItem m a
--- Really not nice, but I have had difficulty getting GHC to unify
--- @F m x a@ with @forall x. F m x a@
 workItem res mapp = wrap $ WorkItem' res mapp where
-  wrap :: forall m x a. WorkItem' m x a -> WorkItem m a
-  wrap = WorkItem . unsafeCoerce
+  -- Really not nice, but I have had difficulty getting GHC to unify
+  -- @WorkItem' m x a@ with @forall x. WorkItem' m x a@
+  wrap = WorkItem . unsafeCoerce :: WorkItem' m x a -> WorkItem m a
 
 -- | Construct a 'WorkItem' containing a result.
 workItem' :: MonadConc m => Maybe a -> m (WorkItem m a)
@@ -64,6 +63,11 @@ result :: MonadConc m => WorkItem m a -> m (Maybe a)
 result f = fmap (_mapped $ unWrap f) `liftM` res where
   res = atomically . readCTMVar . _result $ unWrap f
 
+-- | Unsafe version of 'result', this will error at runtime if the
+-- computation fails.
+unsafeResult :: MonadConc m => WorkItem m a -> m a
+unsafeResult = liftM fromJust . result
+
 -- | Get the current state of a work item.
 getState :: MonadConc m => WorkItem m a -> STMLike m WorkState
 getState f = do
@@ -84,7 +88,7 @@ hasFailed f = do
   else isNothing `liftM` readCTMVar (_result $ unWrap f)
 
 --------------------------------------------------------------------------------
--- Concurrency
+-- Work stealing
 
 -- | Push a batch of work to the queue, returning a 'CTMVar' that can
 -- be blocked on to get the result. As soon as one succeeds, the
