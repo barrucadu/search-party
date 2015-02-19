@@ -1,4 +1,3 @@
-{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ImpredicativeTypes #-}
 {-# LANGUAGE Rank2Types         #-}
 
@@ -6,7 +5,7 @@
 module Control.Concurrent.Find.Internal where
 
 import Control.Concurrent.STM.CTMVar (CTMVar, newEmptyCTMVar, readCTMVar, isEmptyCTMVar, tryPutCTMVar)
-import Control.Monad (liftM, unless)
+import Control.Monad (liftM)
 import Control.Monad.Conc.Class
 import Control.Monad.STM.Class
 import Data.Maybe (isNothing)
@@ -57,52 +56,38 @@ result f = fmap (_mapped $ unWrap f) `liftM` res where
 -- | Push a batch of work to the queue, returning a 'CTMVar' that can
 -- be blocked on to get the result. As soon as one succeeds, the
 -- others are killed.
-work :: MonadConc m => (x -> m (FWrap m a)) -> [x] -> m (CTMVar (STMLike m) (Maybe a))
-work tofwrap workitems = do
-  res <- atomically $ newEmptyCTMVar
-  threadlim <- getNumCapabilities
-  _ <- fork $ driver threadlim res [] workitems
+work :: MonadConc m => [m (FWrap m a)] -> m (CTMVar (STMLike m) (Maybe a))
+work workitems = do
+  res  <- atomically newEmptyCTMVar
+  caps <- getNumCapabilities
+  _    <- fork $ driver caps res
   return res
 
   where
-    driver threadlim res running rest = do
-      -- If we're at the thread limit, block until some threads have
-      -- terminated.
-      bail <- if length running == threadlim
-             then do
-               ts <- atomically $ do
-                 states <- mapM (\(v,t) -> readCTVar v >>= \v' -> return (v', t)) running
-                 if any ((/=StillComputing) . fst) states
-                 then return states
-                 else retry
+    driver caps res = do
+      remaining <- atomically $ newCTVar workitems
+      tids <- mapM (\cap -> forkOn cap $ worker res remaining) [1..caps]
+      _ <- atomically $ readCTMVar res
+      mapM_ killThread tids
 
-               -- If a thread succeded, kill all remaining threads.
-               if (any ((==HasSucceeded) . fst) ts)
-               then mapM_ (killThread . snd) running >> return True
-               else return False
-             else return False
+    worker res remaining = do
+      witem <- steal remaining
+      case witem of
+        Just item -> do
+          fwrap  <- item
+          maybea <- result fwrap
+          case maybea of
+            Just _  -> atomically $ tryPutCTMVar res maybea >> return ()
+            Nothing -> worker res remaining
+        Nothing -> return ()
 
-      -- If we're still going, start new threads up to the limit and
-      -- loop.
-      unless bail $ do
-        ts <- atomically $ mapM (\(v,t) -> readCTVar v >>= \v' -> return (v', t)) running
-        let live = map snd $ filter ((==StillComputing) . fst) ts
-        let (starting, rest') = splitAt (threadlim - length live) rest
-        vars <- atomically $ mapM (const $ newCTVar StillComputing) starting
-        tids <- mapM (\(w, v) -> fork $ go w v res) $ zip starting vars
-
-        driver threadlim res (zip vars tids ++ filter (\(_,t) -> t `elem` live) running) rest'
-
-    go workitem var res = do
-      -- Force (blocks) and store the result.
-      fwrap  <- tofwrap workitem
-      maybea <- result fwrap
-      case maybea of
-        Just _ -> atomically $ do
-          _ <- tryPutCTMVar res maybea
-          writeCTVar var HasSucceeded
-
-        Nothing -> atomically $ writeCTVar var HasFailed
+    steal remaining = atomically $ do
+      remaining' <- readCTVar remaining
+      case remaining' of
+        (x:xs) -> do
+          writeCTVar remaining xs
+          return $ Just x
+        [] -> return Nothing
 
 --------------------------------------------------------------------------------
 -- State snapshots

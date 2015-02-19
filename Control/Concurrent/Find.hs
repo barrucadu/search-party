@@ -107,7 +107,7 @@ findEither f g as bs = (Left `liftM` findIn f as) <|> (Right `liftM` findIn g bs
 oneOf :: MonadConc m => [Find m a] -> Find m a
 oneOf [] = failure
 oneOf as = Find $ do
-  var <- work unFind as
+  var <- work $ map unFind as
   return . wrap $ F var id
 
 --------------------------------------------------------------------------------
