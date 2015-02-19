@@ -1,5 +1,4 @@
-{-# LANGUAGE ImpredicativeTypes #-}
-{-# LANGUAGE Rank2Types         #-}
+{-# LANGUAGE Rank2Types #-}
 
 -- | The guts of the Find monad.
 module Control.Concurrent.Find.Internal where

@@ -1,4 +1,3 @@
-{-# LANGUAGE RankNTypes #-}
 -- | Concurrent nondeterministic search.
 module Control.Concurrent.Find
   ( -- * @Find@ monad
