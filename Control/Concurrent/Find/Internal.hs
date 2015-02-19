@@ -42,7 +42,7 @@ wrap = FWrap . unsafeCoerce
 blockOn :: MonadConc m => [FWrap m ()] -> m Bool
 blockOn fs = atomically $ do
   states <- mapM getState fs
-  case (any (==HasFailed) states, any (==HasSucceeded) states) of
+  case (HasFailed `elem` states, HasSucceeded `elem` states) of
     (True, _) -> return False
     (_, True) -> return True
     _ -> retry
@@ -79,7 +79,7 @@ work workitems = do
       witem <- steal remaining
       case witem of
         Just item ->
-          process item (\maybea -> tryPutCTMVar res maybea >> return ()) (worker res remaining)
+          process item (liftM (const ()) . tryPutCTMVar res) (worker res remaining)
         Nothing -> return ()
 
     process item store continue = do
@@ -108,9 +108,7 @@ getState f = do
   then return StillComputing
   else do
     failed <- hasFailed f
-    if failed
-    then return HasFailed
-    else return HasSucceeded
+    return $ if failed then HasFailed else HasSucceeded
 
 -- | Check if a computation has failed. If the computation has not
 -- terminated, this immediately returns 'False'.
