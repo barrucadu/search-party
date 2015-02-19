@@ -4,7 +4,7 @@
 -- | The guts of the Find monad.
 module Control.Concurrent.Find.Internal where
 
-import Control.Concurrent.STM.CTMVar (CTMVar, newEmptyCTMVar, readCTMVar, isEmptyCTMVar, tryPutCTMVar)
+import Control.Concurrent.STM.CTMVar (CTMVar, newEmptyCTMVar, readCTMVar, isEmptyCTMVar, putCTMVar, tryPutCTMVar)
 import Control.Monad (liftM)
 import Control.Monad.Conc.Class
 import Control.Monad.STM.Class
@@ -64,6 +64,11 @@ work workitems = do
   return res
 
   where
+    -- If there's only one capability don't bother with threads.
+    driver 1 res = go workitems where
+      go [] = fail ""
+      go (item:rest) = process item (putCTMVar res) (go rest)
+
     driver caps res = do
       remaining <- atomically $ newCTVar workitems
       tids <- mapM (\cap -> forkOn cap $ worker res remaining) [1..caps]
@@ -73,13 +78,16 @@ work workitems = do
     worker res remaining = do
       witem <- steal remaining
       case witem of
-        Just item -> do
-          fwrap  <- item
-          maybea <- result fwrap
-          case maybea of
-            Just _  -> atomically $ tryPutCTMVar res maybea >> return ()
-            Nothing -> worker res remaining
+        Just item ->
+          process item (\maybea -> tryPutCTMVar res maybea >> return ()) (worker res remaining)
         Nothing -> return ()
+
+    process item store continue = do
+      fwrap  <- item
+      maybea <- result fwrap
+      case maybea of
+        Just _  -> atomically $ store maybea
+        Nothing -> continue
 
     steal remaining = atomically $ do
       remaining' <- readCTVar remaining
