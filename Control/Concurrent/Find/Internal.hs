@@ -11,35 +11,42 @@ import Control.Monad.STM.Class
 import Data.Maybe (isNothing)
 import Unsafe.Coerce (unsafeCoerce)
 
-newtype FWrap m a = FWrap { unWrap :: forall x. F m x a }
+-- | A unit of work in a monad @m@ which will produce a final result
+-- of type @a@.
+newtype WorkItem m a = WorkItem { unWrap :: forall x. WorkItem' m x a }
 
-data F m x a = F
+-- | A unit of work in a monad @m@ producing a result of type @x@,
+-- which will then be transformed into a value of type @a@.
+data WorkItem' m x a = WorkItem'
   { _result :: CTMVar (STMLike m) (Maybe x)
   -- ^ The result of the computation.
   , _mapped :: x -> a
   -- ^ A function to change the type.
   }
 
-data FState = StillComputing | HasFailed | HasSucceeded
+-- | The possible states that a work item may be in.
+data WorkState = StillComputing | HasFailed | HasSucceeded
   deriving (Eq)
 
--- | Ignore the contents of an 'FWrap' (for passing lists of them
+-- | Ignore the contents of a 'WorkItem' (for passing lists of them
 -- around).
-voidF :: FWrap m a -> FWrap m ()
-voidF f = wrap $ F (_result $ unWrap f) $ const ()
+voidW :: WorkItem m a -> WorkItem m ()
+voidW f = workItem (_result $ unWrap f) $ const ()
 
--- | Construct an 'FWrap' from an 'F'.
-wrap :: F m x a -> FWrap m a
+-- | Construct a 'WorkItem'.
+workItem :: (CTMVar (STMLike m) (Maybe x)) -> (x -> a) -> WorkItem m a
 -- Really not nice, but I have had difficulty getting GHC to unify
 -- @F m x a@ with @forall x. F m x a@
-wrap = FWrap . unsafeCoerce
+workItem res mapp = wrap $ WorkItem' res mapp where
+  wrap :: forall m x a. WorkItem' m x a -> WorkItem m a
+  wrap = WorkItem . unsafeCoerce
 
 --------------------------------------------------------------------------------
 -- Concurrency
 
 -- | Block until all computations interested in have successfully
 -- completed. If any fail, this immediately returns 'False'.
-blockOn :: MonadConc m => [FWrap m ()] -> m Bool
+blockOn :: MonadConc m => [WorkItem m ()] -> m Bool
 blockOn fs = atomically $ do
   states <- mapM getState fs
   case (HasFailed `elem` states, HasSucceeded `elem` states) of
@@ -49,14 +56,14 @@ blockOn fs = atomically $ do
 
 -- | Get the result of a computation, this blocks until the result is
 -- present, so be careful not to lose parallelism.
-result :: MonadConc m => FWrap m a -> m (Maybe a)
+result :: MonadConc m => WorkItem m a -> m (Maybe a)
 result f = fmap (_mapped $ unWrap f) `liftM` res where
   res = atomically . readCTMVar . _result $ unWrap f
 
 -- | Push a batch of work to the queue, returning a 'CTMVar' that can
 -- be blocked on to get the result. As soon as one succeeds, the
 -- others are killed.
-work :: MonadConc m => [m (FWrap m a)] -> m (CTMVar (STMLike m) (Maybe a))
+work :: MonadConc m => [m (WorkItem m a)] -> m (CTMVar (STMLike m) (Maybe a))
 work workitems = do
   res  <- atomically newEmptyCTMVar
   caps <- getNumCapabilities
@@ -100,8 +107,8 @@ work workitems = do
 --------------------------------------------------------------------------------
 -- State snapshots
 
--- | Get the current state of a computation.
-getState :: MonadConc m => FWrap m a -> STMLike m FState
+-- | Get the current state of a work item.
+getState :: MonadConc m => WorkItem m a -> STMLike m WorkState
 getState f = do
   empty <- isEmptyCTMVar . _result $ unWrap f
   if empty
@@ -110,9 +117,9 @@ getState f = do
     failed <- hasFailed f
     return $ if failed then HasFailed else HasSucceeded
 
--- | Check if a computation has failed. If the computation has not
+-- | Check if a work item has failed. If the computation has not
 -- terminated, this immediately returns 'False'.
-hasFailed :: MonadConc m => FWrap m a -> STMLike m Bool
+hasFailed :: MonadConc m => WorkItem m a -> STMLike m Bool
 hasFailed f = do
   working <- isEmptyCTMVar . _result $ unWrap f
   if working

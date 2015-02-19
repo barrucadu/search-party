@@ -18,7 +18,7 @@ import Control.Monad (MonadPlus(..), liftM)
 import Control.Monad.Conc.Class (MonadConc, atomically)
 import Data.Maybe (fromJust)
 
-newtype Find m a = Find { unFind :: m (FWrap m a) }
+newtype Find m a = Find { unFind :: m (WorkItem m a) }
 
 --------------------------------------------------------------------------------
 -- Instances
@@ -26,18 +26,18 @@ newtype Find m a = Find { unFind :: m (FWrap m a) }
 instance MonadConc m => Functor (Find m) where
   fmap g (Find mf) = Find $ do
     f <- mf
-    return . wrap $ F (_result $ unWrap f) (g . _mapped (unWrap f))
+    return $ workItem (_result $ unWrap f) (g . _mapped (unWrap f))
 
 instance MonadConc m => Applicative (Find m) where
   pure a = Find $ do
     var <- atomically . newCTMVar $ Just a
-    return . wrap $ F var id
+    return $ workItem var id
 
   (Find mf) <*> (Find ma) = Find $ do
     f <- mf
     a <- ma
 
-    success <- blockOn [voidF f, voidF a]
+    success <- blockOn [voidW f, voidW a]
 
     if success
     then do
@@ -45,7 +45,7 @@ instance MonadConc m => Applicative (Find m) where
       ares <- fromJust `liftM` result a
 
       var <- atomically . newCTMVar . Just $ fres ares
-      return . wrap $ F var id
+      return $ workItem var id
 
     else fail ""
 
@@ -54,7 +54,7 @@ instance MonadConc m => Monad (Find m) where
 
   fail _ = Find $ do
     var <- atomically $ newCTMVar Nothing
-    return . wrap $ F var id
+    return $ workItem var id
 
   (Find mf) >>= g = Find $ do
     f <- mf
@@ -108,7 +108,7 @@ oneOf :: MonadConc m => [Find m a] -> Find m a
 oneOf [] = failure
 oneOf as = Find $ do
   var <- work $ map unFind as
-  return . wrap $ F var id
+  return $ workItem var id
 
 --------------------------------------------------------------------------------
 -- Execution
