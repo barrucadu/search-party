@@ -53,7 +53,7 @@ workItem' a = flip workItem id `liftM` atomically (newCTMVar a)
 blockOn :: MonadConc m => [WorkItem m ()] -> m Bool
 blockOn fs = atomically $ do
   states <- mapM getState fs
-  case (HasFailed `elem` states, HasSucceeded `elem` states) of
+  case (HasFailed `elem` states, all (==HasSucceeded) states) of
     (True, _) -> return False
     (_, True) -> return True
     _ -> retry
