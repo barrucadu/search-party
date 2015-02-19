@@ -1,4 +1,5 @@
-{-# LANGUAGE Rank2Types #-}
+{-# LANGUAGE ImpredicativeTypes #-}
+{-# LANGUAGE Rank2Types         #-}
 
 -- | The guts of the Find monad.
 module Control.Concurrent.Find.Internal where
@@ -38,7 +39,10 @@ workItem :: CTMVar (STMLike m) (Maybe x) -> (x -> a) -> WorkItem m a
 workItem res mapp = wrap $ WorkItem' res mapp where
   -- Really not nice, but I have had difficulty getting GHC to unify
   -- @WorkItem' m x a@ with @forall x. WorkItem' m x a@
-  wrap = WorkItem . unsafeCoerce :: WorkItem' m x a -> WorkItem m a
+  --
+  -- This needs ImpredicativeTypes in GHC 7.8.
+  wrap :: WorkItem' m x a -> WorkItem m a
+  wrap = WorkItem . unsafeCoerce
 
 -- | Construct a 'WorkItem' containing a result.
 workItem' :: MonadConc m => Maybe a -> m (WorkItem m a)
