@@ -3,7 +3,6 @@
 module Control.Concurrent.Find
   ( -- * @Find@ monad
     Find
-  -- * Running searches
   , runFind
   -- * Combinators
   , (!)
@@ -18,16 +17,30 @@ import Control.Monad (MonadPlus(..), liftM)
 import Control.Monad.Conc.Class (MonadConc, atomically)
 import Data.Maybe (fromJust)
 
+-- | A value of type @Find m a@ represents a concurrent search
+-- computation (happening in the 'MonadConc' monad @m@) which may
+-- produce a value of type @a@, or fail. If a value can be returned,
+-- one will be (although it's nondeterministic which one will actually
+-- be returned). Usually you will be working with values of type @Find
+-- IO a@, but the generality allows for testing.
+--
+-- You should prefer using the 'Applicative' instance over the 'Monad'
+-- instance if you can, as the 'Applicative' preserves parallelism.
 newtype Find m a = Find { unFind :: m (WorkItem m a) }
 
 --------------------------------------------------------------------------------
 -- Instances
 
+-- | 'fmap' delays applying the function until the value is demanded,
+-- to avoid blocking.
 instance MonadConc m => Functor (Find m) where
   fmap g (Find mf) = Find $ do
     f <- mf
     return $ workItem (_result $ unWrap f) (g . _mapped (unWrap f))
 
+-- | '<*>' performs both computations in parallel, and immediately
+-- fails as soon as one does, giving a symmetric short-circuiting
+-- behaviour.
 instance MonadConc m => Applicative (Find m) where
   pure a = Find $ do
     var <- atomically . newCTMVar $ Just a
@@ -49,6 +62,8 @@ instance MonadConc m => Applicative (Find m) where
 
     else fail ""
 
+-- | '>>=' should be avoided, as it necessarily imposes sequencing,
+-- and blocks until the value being bound has been computed.
 instance MonadConc m => Monad (Find m) where
   return = pure
 
@@ -65,11 +80,15 @@ instance MonadConc m => Monad (Find m) where
         mb
       Nothing -> fail ""
 
+-- | '<|>' is a nondeterministic choice if both computations succeed,
+-- otherwise it returns the nonfailing one. If both fail, this fails.
 instance MonadConc m => Alternative (Find m) where
   empty = fail ""
 
   a <|> b = oneOf [a, b]
 
+-- | 'mplus' is the same as '<|>', and follows the left distribution
+-- law.
 instance MonadConc m => MonadPlus (Find m) where
   mzero = empty
   mplus = (<|>)
@@ -113,5 +132,8 @@ oneOf as = Find $ do
 --------------------------------------------------------------------------------
 -- Execution
 
+-- | Execute a 'Find' computation, returning a 'Just' value if there
+-- was at least one result (and a different value may be returned each
+-- time), or 'Nothing' if there are no results.
 runFind :: MonadConc m => Find m a -> m (Maybe a)
 runFind (Find mf) = mf >>= result
