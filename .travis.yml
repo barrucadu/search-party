@@ -57,13 +57,11 @@ install:
   - $CABAL configure -flib-Werror --enable-tests $MODE
 
 script:
-# - $CABAL configure --enable-tests
- - $CABAL configure
+ - $CABAL configure --enable-tests
  - $CABAL build
 
 # Run tests
-# (enable when there are tests)
-# - $CABAL test
+ - $CABAL test
 
 # Check package for common errors
 # (enable after stable release)

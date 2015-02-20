@@ -25,3 +25,11 @@ library
   default-language:    Haskell2010
 
   ghc-options:         -Wall -threaded
+
+test-suite tests
+  hs-source-dirs:      tests
+  type:                exitcode-stdio-1.0
+  main-is:             Main.hs
+  build-depends:       base, search-party, dejafu, monad-loops
+  default-language:    Haskell2010
+  ghc-options:         -threaded
