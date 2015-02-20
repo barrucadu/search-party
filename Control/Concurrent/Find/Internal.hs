@@ -4,8 +4,8 @@
 -- | The guts of the Find monad.
 module Control.Concurrent.Find.Internal where
 
-import Control.Concurrent.STM.CTMVar (CTMVar, newEmptyCTMVar, newCTMVar, readCTMVar, isEmptyCTMVar, putCTMVar, tryPutCTMVar)
-import Control.Monad (liftM)
+import Control.Concurrent.STM.CTMVar (CTMVar, newEmptyCTMVar, newCTMVar, readCTMVar, isEmptyCTMVar, putCTMVar, tryPutCTMVar, tryTakeCTMVar)
+import Control.Monad (liftM, unless)
 import Control.Monad.Conc.Class
 import Control.Monad.STM.Class
 import Data.Maybe (fromJust, isNothing)
@@ -19,7 +19,7 @@ import Unsafe.Coerce (unsafeCoerce)
 newtype WorkItem m a = WorkItem { unWrap :: forall x. WorkItem' m x a }
 
 instance Functor (WorkItem m) where
-  fmap f (WorkItem w) = workItem (_result w) (f . _mapped w)
+  fmap f (WorkItem w) = workItem (_result w) (f . _mapped w) (_killme w)
 
 -- | A unit of work in a monad @m@ producing a result of type @x@,
 -- which will then be transformed into a value of type @a@.
@@ -28,6 +28,8 @@ data WorkItem' m x a = WorkItem'
   -- ^ The future result of the computation.
   , _mapped :: x -> a
   -- ^ Some post-processing to do.
+  , _killme :: m ()
+  -- ^ Fail the computation, if it's still running.
   }
 
 -- | The possible states that a work item may be in.
@@ -35,8 +37,8 @@ data WorkState = StillComputing | HasFailed | HasSucceeded
   deriving (Eq)
 
 -- | Construct a 'WorkItem'.
-workItem :: CTMVar (STMLike m) (Maybe x) -> (x -> a) -> WorkItem m a
-workItem res mapp = wrap $ WorkItem' res mapp where
+workItem :: CTMVar (STMLike m) (Maybe x) -> (x -> a) -> m () -> WorkItem m a
+workItem res mapp kill = wrap $ WorkItem' res mapp kill where
   -- Really not nice, but I have had difficulty getting GHC to unify
   -- @WorkItem' m x a@ with @forall x. WorkItem' m x a@
   --
@@ -46,20 +48,28 @@ workItem res mapp = wrap $ WorkItem' res mapp where
 
 -- | Construct a 'WorkItem' containing a result.
 workItem' :: MonadConc m => Maybe a -> m (WorkItem m a)
-workItem' a = flip workItem id `liftM` atomically (newCTMVar a)
+workItem' a = (\v -> workItem v id $ return ()) `liftM` atomically (newCTMVar a)
 
 --------------------------------------------------------------------------------
 -- Processing work items
 
 -- | Block until all computations interested in have successfully
--- completed. If any fail, this immediately returns 'False'.
+-- completed. If any fail, this immediately returns 'False' and kills
+-- the still-running ones.
 blockOn :: MonadConc m => [WorkItem m ()] -> m Bool
-blockOn fs = atomically $ do
-  states <- mapM getState fs
-  case (HasFailed `elem` states, all (==HasSucceeded) states) of
-    (True, _) -> return False
-    (_, True) -> return True
-    _ -> retry
+blockOn fs = do
+  -- Block until one thing fails, or everything succeeds.
+  success <- atomically $ do
+    states <- mapM getState fs
+    case (HasFailed `elem` states, all (==HasSucceeded) states) of
+      (True, _) -> return False
+      (_, True) -> return True
+      _ -> retry
+
+  -- Kill everything if something failed.
+  unless success $ mapM_ (_killme . unWrap) fs
+
+  return success
 
 -- | Get the result of a computation, this blocks until the result is
 -- present, so be careful not to lose parallelism.
@@ -95,58 +105,56 @@ hasFailed f = do
 -- Work stealing
 
 -- | Push a batch of work to the queue, returning a 'CTMVar' that can
--- be blocked on to get the result. As soon as one succeeds, the
--- others are killed.
-work :: MonadConc m => [m (WorkItem m a)] -> m (CTMVar (STMLike m) (Maybe a))
+-- be blocked on to get the result, and an action that can be used to
+-- kill the computation. As soon as one succeeds, the others are
+-- killed.
+work :: MonadConc m => [m (WorkItem m a)] -> m (CTMVar (STMLike m) (Maybe a), m ())
 work workitems = do
-  res  <- atomically newEmptyCTMVar
-  caps <- getNumCapabilities
-  _    <- fork $ driver caps res
+  res    <- atomically newEmptyCTMVar
+  kill   <- atomically newEmptyCTMVar
+  caps   <- getNumCapabilities
+  dtid   <- fork $ driver caps res kill
+  killme <- atomically $ readCTMVar kill
 
-  return res
+  return (res, killme >> killThread dtid)
 
   where
     -- If there's only one capability don't bother with threads.
-    driver 1 res = go workitems where
-      go [] = atomically $ putCTMVar res Nothing
-      go (item:rest) = process item (putCTMVar res) (go rest)
+    driver 1 res kill = do
+      atomically . putCTMVar kill $ failit res
+      process workitems res
 
     -- Fork off as many threads as there are capabilities, and queue
     -- up the remaining work.
-    driver caps res = do
-      remaining <- atomically $ newCTVar workitems
-      tids      <- mapM (\cap -> forkOn cap $ worker res remaining) [1..caps]
-      _         <- atomically $ readCTMVar res
+    driver caps res kill = do
+      -- Given a cap, get the work for that cap.
+      let remaining cap = map (!!cap) $ filter (\xs -> length xs >= cap) $ chunks caps workitems
 
-      mapM_ killThread tids
+      -- Fork off chunks of work onto separate caps
+      tids <- mapM (\cap -> forkOn cap $ process (remaining cap) res) [0..caps-1]
 
-    -- Grab the work item at the head of the list, process it, and
-    -- then either store a successful result or loop. Terminate when
-    -- there is no work left.
-    worker res remaining = do
-      witem <- steal remaining
+      -- Construct an action to short-circuit the computation.
+      atomically . putCTMVar kill $ failit res >> mapM_ killThread tids
 
-      case witem of
-        Just item ->
-          process item (liftM (const ()) . tryPutCTMVar res) (worker res remaining)
-        Nothing -> atomically $ const () `liftM` tryPutCTMVar res Nothing
+      -- Block until there is a result then kill any still-running
+      -- threads.
+      atomically (readCTMVar res) >> mapM_ killThread tids
+
+    -- Split a list into chunks.
+    chunks i xs = map (take i) $ splitter xs (:) [] where
+      splitter [] _ n = n
+      splitter l c n = l `c` splitter (drop i l) c n
 
     -- Process a work item and store the result if it is a success,
     -- otherwise continue.
-    process item store continue = do
+    process [] res = failit res
+    process (item:rest) res = do
       fwrap  <- item
       maybea <- result fwrap
 
       case maybea of
-        Just _  -> atomically $ store maybea
-        Nothing -> continue
+        Just _  -> atomically $ const () `liftM` (tryTakeCTMVar res >> putCTMVar res maybea)
+        Nothing -> process rest res
 
-    -- Take the work item at the head of the list.
-    steal remaining = atomically $ do
-      remaining' <- readCTVar remaining
-
-      case remaining' of
-        (x:xs) -> do
-          writeCTVar remaining xs
-          return $ Just x
-        [] -> return Nothing
+    -- Record that a computation failed.
+    failit res = atomically $ const () `liftM` tryPutCTMVar res Nothing

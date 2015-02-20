@@ -13,9 +13,8 @@ module Control.Concurrent.Find
 
 import Control.Applicative (Applicative(..), Alternative(..), (<$>))
 import Control.Concurrent.Find.Internal
-import Control.Concurrent.STM.CTMVar (newCTMVar)
 import Control.Monad (MonadPlus(..), void, liftM)
-import Control.Monad.Conc.Class (MonadConc, atomically)
+import Control.Monad.Conc.Class (MonadConc)
 import Data.Maybe (isJust)
 import System.IO.Unsafe (unsafePerformIO)
 
@@ -55,10 +54,9 @@ instance MonadConc m => Applicative (Find m) where
       fres <- unsafeResult f
       ares <- unsafeResult a
 
-      var <- atomically . newCTMVar . Just $ fres ares
-      return $ workItem var id
+      workItem' . Just $ fres ares
 
-    else fail ""
+    else workItem' Nothing
 
 -- | '>>=' should be avoided, as it necessarily imposes sequencing,
 -- and blocks until the value being bound has been computed.
@@ -141,5 +139,5 @@ findEither f g as bs = (Left <$> findIn f as) <|> (Right <$> findIn g bs)
 oneOf :: MonadConc m => [Find m a] -> Find m a
 oneOf [] = failure
 oneOf as = Find $ do
-  var <- work $ map unFind as
-  return $ workItem var id
+  (var, kill) <- work $ map unFind as
+  return $ workItem var id kill
