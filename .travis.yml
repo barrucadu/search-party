@@ -46,6 +46,12 @@ before_install:
       export PATH=$HOME/.cabal/bin:$PATH
     fi
 
+  # dejafu isn't on hackage yet.
+  - git clone https://github.com/barrucadu/dejafu.git
+  - pushd dejafu
+  - cabal install
+  - popd
+
 install:
   - $CABAL install --dependencies-only --enable-tests
   - $CABAL configure -flib-Werror --enable-tests $MODE
