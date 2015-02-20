@@ -122,16 +122,14 @@ work workitems = do
     -- If there's only one capability don't bother with threads.
     driver 1 res kill = do
       atomically . putCTMVar kill $ failit res
-      process workitems res
+      remaining <- newCRef workitems
+      process remaining res
 
     -- Fork off as many threads as there are capabilities, and queue
     -- up the remaining work.
     driver caps res kill = do
-      -- Given a cap, get the work for that cap.
-      let remaining cap = map (!!cap) $ filter (\xs -> length xs >= cap) $ chunks caps workitems
-
-      -- Fork off chunks of work onto separate caps
-      tids <- mapM (\cap -> forkOn cap $ process (remaining cap) res) [0..caps-1]
+      remaining <- newCRef workitems
+      tids <- mapM (\cap -> forkOn cap $ process remaining res) [0..caps-1]
 
       -- Construct an action to short-circuit the computation.
       atomically . putCTMVar kill $ failit res >> mapM_ killThread tids
@@ -140,21 +138,19 @@ work workitems = do
       -- threads.
       atomically (readCTMVar res) >> mapM_ killThread tids
 
-    -- Split a list into chunks.
-    chunks i xs = map (take i) $ splitter xs (:) [] where
-      splitter [] _ n = n
-      splitter l c n = l `c` splitter (drop i l) c n
-
     -- Process a work item and store the result if it is a success,
     -- otherwise continue.
-    process [] res = failit res
-    process (item:rest) res = do
-      fwrap  <- item
-      maybea <- result fwrap
+    process remaining res = do
+      mitem <- modifyCRef remaining $ \rs -> if null rs then ([], Nothing) else (tail rs, Just $ head rs)
+      case mitem of
+        Just item -> do
+          fwrap  <- item
+          maybea <- result fwrap
 
-      case maybea of
-        Just _  -> atomically $ const () `liftM` (tryTakeCTMVar res >> putCTMVar res maybea)
-        Nothing -> process rest res
+          case maybea of
+            Just _  -> atomically $ const () `liftM` (tryTakeCTMVar res >> putCTMVar res maybea)
+            Nothing -> process remaining res
+        Nothing -> failit res
 
     -- Record that a computation failed.
     failit res = atomically $ const () `liftM` tryPutCTMVar res Nothing
