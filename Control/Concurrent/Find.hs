@@ -6,9 +6,9 @@ module Control.Concurrent.Find
   , unsafeRunFind
   , hasResult
   -- * Combinators
-  , (!)
+  , (!), ($?)
   , success, failure
-  , findIn, findBoth, findEither, oneOf
+  , findIn, findInMapped, findBoth, findEither, oneOf
   ) where
 
 import Control.Applicative (Applicative(..), Alternative(..), (<$>))
@@ -113,6 +113,10 @@ hasResult f = unsafePerformIO $ isJust `liftM` runFind f
 (!) :: MonadConc m => [a] -> (a -> Bool) -> Find m a
 (!) = flip findIn
 
+-- | Flipped infix version of 'findInMapped'.
+($?) :: MonadConc m => [a] -> (a -> Maybe b) -> Find m b
+($?) = flip findInMapped
+
 -- | Search which always succeeds.
 success :: MonadConc m => a -> Find m a
 success = return
@@ -124,6 +128,10 @@ failure = fail ""
 -- | Find an element of a list satisfying a predicate.
 findIn :: MonadConc m => (a -> Bool) -> [a] -> Find m a
 findIn f as = oneOf [if f a then success a else failure | a <- as]
+
+-- | Find an element of a list after some transformation.
+findInMapped :: MonadConc m => (a -> Maybe b) -> [a] -> Find m b
+findInMapped f = oneOf . map (maybe failure success . f)
 
 -- | Find elements from a pair of lists satisfying predicates. Both
 -- lists are searched in parallel.
