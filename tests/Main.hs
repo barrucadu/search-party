@@ -4,6 +4,7 @@ import Control.Concurrent.Find
 import Control.Monad.Conc.Class (MonadConc)
 import Control.Monad.Loops (andM)
 import Data.List (foldl')
+import Data.Maybe (listToMaybe)
 import System.Exit (exitSuccess, exitFailure)
 import Test.DejaFu (Predicate, dejafus, deadlocksNever, exceptionsNever, alwaysTrue)
 
@@ -46,9 +47,7 @@ countdown ns n = dejafus (runFind $ solution ns n) $ cases "countdown" (\e -> C.
 -- 'solutions''' from CountDown.hs recast as a 'Find' computation.
 solution :: MonadConc m => [Int] -> Int -> Find m C.Expr
 solution ns n = C.choices ns $? soln where
-  soln ns' = case [e | (e,m) <- C.results' ns', m == n] of
-    [] -> Nothing
-    (e:_) -> e `seq` Just e
+  soln ns' = listToMaybe [e | (e,m) <- C.results' ns', m == n]
 
 --------------------------------------------------------------------------------
 -- Utility functions
