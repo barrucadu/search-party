@@ -5,18 +5,14 @@ import Control.Monad.Conc.Class (MonadConc)
 import Control.Monad.Loops (andM)
 import Data.List (foldl')
 import System.Exit (exitSuccess, exitFailure)
-import Test.DejaFu (dejafus, deadlocksNever, exceptionsNever, alwaysTrue)
+import Test.DejaFu (Predicate, dejafus, deadlocksNever, exceptionsNever, alwaysTrue)
+
+import qualified CountDown as C
 
 main :: IO ()
 main = do
-  pass <- andM [trees]
+  pass <- andM [trees, countdown [16,8,3] 21]
   if pass then exitSuccess else exitFailure
-
--- | Lift a predicate over the result value to work on the test
--- output.
-liftB :: (a -> Bool) -> Either z (Maybe a) -> Bool
-liftB f (Right (Just a)) = f a
-liftB _ _ = False
 
 --------------------------------------------------------------------------------
 -- (trees): Finding large binary trees
@@ -38,13 +34,37 @@ stepTree Leaf = Branch 1 Leaf Leaf
 stepTree t@(Branch i _ _) = Branch (i+1) t t
 
 trees :: IO Bool
-trees = dejafus find cases where
-  find :: MonadConc m => m (Maybe Int)
-  find = runFind $ [0..] ! check
-
+trees = dejafus (runFind $ [0..] ! check) $ cases "trees" check where
   check d = sumTree (foldl' (.) id (replicate d stepTree) Leaf) > 1000
 
-  cases = [ ("Tree Summing (No Deadlocks)",  deadlocksNever)
-          , ("Tree Summing (No Exceptions)", exceptionsNever)
-          , ("Tree Summing (Valid Result)",  alwaysTrue $ liftB check)
-          ]
+--------------------------------------------------------------------------------
+-- (countdown): Hutton's Countdown program (Programming in Haskell, ch. 11)
+
+countdown :: [Int] -> Int -> IO Bool
+countdown ns n = dejafus (runFind $ solution ns n) $ cases "countdown" (\e -> C.solution e ns n)  where
+
+-- 'solutions''' from CountDown.hs recast as a 'Find' computation.
+solution :: MonadConc m => [Int] -> Int -> Find m C.Expr
+solution ns n = C.choices ns $? soln where
+  soln ns' = case [e | (e,m) <- C.results' ns', m == n] of
+    [] -> Nothing
+    (e:_) -> e `seq` Just e
+
+--------------------------------------------------------------------------------
+-- Utility functions
+
+-- | Test cases.
+cases :: (Eq a, Show a) => String -> (a -> Bool) -> [(String, Predicate (Maybe a))]
+cases name check =
+  [ (prefix ++ "No Deadlocks ", deadlocksNever)
+  , (prefix ++ "No Exceptions", exceptionsNever)
+  , (prefix ++ "Valid Result ", alwaysTrue $ liftB check)
+  ]
+
+  where prefix = "(" ++ name ++ ")" ++ replicate (10 - length name) ' '
+
+-- | Lift a predicate over the result value to work on the test
+-- output.
+liftB :: (a -> Bool) -> Either z (Maybe a) -> Bool
+liftB f (Right (Just a)) = f a
+liftB _ _ = False
