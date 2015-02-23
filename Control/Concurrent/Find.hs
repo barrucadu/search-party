@@ -5,10 +5,14 @@ module Control.Concurrent.Find
   , runFind
   , unsafeRunFind
   , hasResult
-  -- * Combinators
-  , (!), ($?)
+  -- * Basic Searches
   , success, failure
-  , findIn, findInMapped, findBoth, findEither, oneOf
+  , oneOf, allOf
+  -- * Combinators
+  , (!), (?), (@!), (@?)
+  , findIn, findIn'
+  , findInMapped, findInMapped'
+  , findBoth, findEither
   ) where
 
 import Control.Applicative (Applicative(..), Alternative(..), (<$>))
@@ -107,15 +111,7 @@ hasResult :: Find IO a -> Bool
 hasResult f = unsafePerformIO $ isJust `liftM` runFind f
 
 --------------------------------------------------------------------------------
--- Combinators
-
--- | Flipped infix version of 'findIn'.
-(!) :: MonadConc m => [a] -> (a -> Bool) -> Find m a
-(!) = flip findIn
-
--- | Flipped infix version of 'findInMapped'.
-($?) :: MonadConc m => [a] -> (a -> Maybe b) -> Find m b
-($?) = flip findInMapped
+-- Basic Searches
 
 -- | Search which always succeeds.
 success :: MonadConc m => a -> Find m a
@@ -125,13 +121,54 @@ success = return
 failure :: MonadConc m => Find m a
 failure = fail ""
 
+-- | Return one non-failing result nondeterministically.
+oneOf :: MonadConc m => [Find m a] -> Find m a
+oneOf [] = failure
+oneOf as = Find $ do
+  (var, kill) <- work True $ map unFind as
+  return $ workItem var head kill
+
+-- | Return all non-failing results, the order is nondeterministic.
+allOf :: MonadConc m => [Find m a] -> Find m [a]
+allOf [] = success []
+allOf as = Find $ do
+  (var, kill) <- work False $ map unFind as
+  return $ workItem var id kill
+
+--------------------------------------------------------------------------------
+-- Combinators
+
+-- | Flipped infix version of 'findIn'.
+(!) :: MonadConc m => [a] -> (a -> Bool) -> Find m a
+(!) = flip findIn
+
+-- | Flipped infix version of 'findInMapped'.
+(?) :: MonadConc m => [a] -> (a -> Maybe b) -> Find m b
+(?) = flip findInMapped
+
+-- | Flipped infix version of 'findIn''.
+(@!) :: MonadConc m => [a] -> (a -> Bool) -> Find m [a]
+(@!) = flip findIn'
+
+-- | Flipped infix version of 'findInMapped''.
+(@?) :: MonadConc m => [a] -> (a -> Maybe b) -> Find m [b]
+(@?) = flip findInMapped'
+
 -- | Find an element of a list satisfying a predicate.
 findIn :: MonadConc m => (a -> Bool) -> [a] -> Find m a
 findIn f as = oneOf [if f a then success a else failure | a <- as]
 
+-- | Variant of 'findIn' which returns all successes.
+findIn' :: MonadConc m => (a -> Bool) -> [a] -> Find m [a]
+findIn' f as = allOf [if f a then success a else failure | a <- as]
+
 -- | Find an element of a list after some transformation.
 findInMapped :: MonadConc m => (a -> Maybe b) -> [a] -> Find m b
 findInMapped f = oneOf . map (maybe failure success . f)
+
+-- | Variant of 'findInMapped' which returns all 'Just's.
+findInMapped' :: MonadConc m => (a -> Maybe b) -> [a] -> Find m [b]
+findInMapped' f = allOf . map (maybe failure success . f)
 
 -- | Find elements from a pair of lists satisfying predicates. Both
 -- lists are searched in parallel.
@@ -142,10 +179,3 @@ findBoth f g as bs = (,) <$> findIn f as <*> findIn g bs
 -- predicate. Both lists are searched in parallel.
 findEither :: MonadConc m => (a -> Bool) -> (b -> Bool) -> [a] -> [b] -> Find m (Either a b)
 findEither f g as bs = (Left <$> findIn f as) <|> (Right <$> findIn g bs)
-
--- | Return one non-failing result nondeterministically.
-oneOf :: MonadConc m => [Find m a] -> Find m a
-oneOf [] = failure
-oneOf as = Find $ do
-  (var, kill) <- work $ map unFind as
-  return $ workItem var id kill

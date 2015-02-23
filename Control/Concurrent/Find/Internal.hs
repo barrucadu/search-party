@@ -5,7 +5,7 @@
 module Control.Concurrent.Find.Internal where
 
 import Control.Concurrent.STM.CTMVar (CTMVar, newEmptyCTMVar, newCTMVar, readCTMVar, isEmptyCTMVar, putCTMVar, tryPutCTMVar, tryTakeCTMVar)
-import Control.Monad (liftM, unless)
+import Control.Monad (liftM, unless, when)
 import Control.Monad.Conc.Class
 import Control.Monad.STM.Class
 import Data.Maybe (fromJust, isNothing)
@@ -106,10 +106,11 @@ hasFailed f = do
 
 -- | Push a batch of work to the queue, returning a 'CTMVar' that can
 -- be blocked on to get the result, and an action that can be used to
--- kill the computation. As soon as one succeeds, the others are
--- killed.
-work :: MonadConc m => [m (WorkItem m a)] -> m (CTMVar (STMLike m) (Maybe a), m ())
-work workitems = do
+-- kill the computation. If the first argument is true, as soon as one
+-- succeeds, the others are killed; otherwise all results are
+-- gathered.
+work :: MonadConc m => Bool -> [m (WorkItem m a)] -> m (CTMVar (STMLike m) (Maybe [a]), m ())
+work shortcircuit workitems = do
   res    <- atomically newEmptyCTMVar
   kill   <- atomically newEmptyCTMVar
   caps   <- getNumCapabilities
@@ -134,9 +135,11 @@ work workitems = do
       -- Construct an action to short-circuit the computation.
       atomically . putCTMVar kill $ failit res >> mapM_ killThread tids
 
-      -- Block until there is a result then kill any still-running
-      -- threads.
-      atomically (readCTMVar res) >> mapM_ killThread tids
+      -- If short-circuiting, block until there is a result then kill
+      -- any still-running threads.
+      when shortcircuit $ do
+        _ <- atomically $ readCTMVar res
+        mapM_ killThread tids
 
     -- Process a work item and store the result if it is a success,
     -- otherwise continue.
@@ -148,7 +151,11 @@ work workitems = do
           maybea <- result fwrap
 
           case maybea of
-            Just _  -> atomically $ const () `liftM` (tryTakeCTMVar res >> putCTMVar res maybea)
+            Just a -> atomically $ do
+              val <- tryTakeCTMVar res
+              case val of
+                Just (Just as) -> putCTMVar res $ Just (a:as)
+                _ -> putCTMVar res $ Just [a]
             Nothing -> process remaining res
         Nothing -> failit res
 

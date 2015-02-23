@@ -46,7 +46,7 @@ countdown ns n = dejafus (runFind $ solution ns n) $ cases "countdown" (\e -> C.
 
 -- 'solutions''' from CountDown.hs recast as a 'Find' computation.
 solution :: MonadConc m => [Int] -> Int -> Find m C.Expr
-solution ns n = C.choices ns $? soln where
+solution ns n = C.choices ns ? soln where
   soln ns' = listToMaybe [e | (e,m) <- C.results' ns', m == n]
 
 --------------------------------------------------------------------------------
