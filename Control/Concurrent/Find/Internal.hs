@@ -122,15 +122,20 @@ work shortcircuit workitems = do
   where
     -- If there's only one capability don't bother with threads.
     driver 1 res kill = do
+      tmp <- if shortcircuit then return res else atomically newEmptyCTMVar
+      block <- newEmptyCVar
       atomically . putCTMVar kill $ failit res
       remaining <- newCRef workitems
-      process remaining res
+      process remaining tmp block
+      atomically $ readCTMVar tmp >>= putCTMVar res
 
     -- Fork off as many threads as there are capabilities, and queue
     -- up the remaining work.
     driver caps res kill = do
+      tmp <- if shortcircuit then return res else atomically newEmptyCTMVar
       remaining <- newCRef workitems
-      tids <- mapM (\cap -> forkOn cap $ process remaining res) [0..caps-1]
+      blocks <- mapM (const newEmptyCVar) [0..caps-1]
+      tids <- mapM (\(cap, block) -> forkOn cap $ process remaining tmp block) $ zip [0..caps-1] blocks
 
       -- Construct an action to short-circuit the computation.
       atomically . putCTMVar kill $ failit res >> mapM_ killThread tids
@@ -138,12 +143,17 @@ work shortcircuit workitems = do
       -- If short-circuiting, block until there is a result then kill
       -- any still-running threads.
       when shortcircuit $ do
-        _ <- atomically $ readCTMVar res
+        _ <- atomically $ readCTMVar tmp
         mapM_ killThread tids
+
+      -- Block until all threads are terminated, and then save the
+      -- result.
+      mapM_ readCVar blocks
+      atomically $ readCTMVar tmp >>= putCTMVar res
 
     -- Process a work item and store the result if it is a success,
     -- otherwise continue.
-    process remaining res = do
+    process remaining res block = do
       mitem <- modifyCRef remaining $ \rs -> if null rs then ([], Nothing) else (tail rs, Just $ head rs)
       case mitem of
         Just item -> do
@@ -157,10 +167,14 @@ work shortcircuit workitems = do
                 case val of
                   Just (Just as) -> putCTMVar res $ Just (a:as)
                   _ -> putCTMVar res $ Just [a]
-              unless shortcircuit $
-                process remaining res
-            Nothing -> process remaining res
-        Nothing -> failit res
+
+              -- If short-circuiting, indicate termination, otherwise
+              -- loop.
+              if shortcircuit
+              then putCVar block ()
+              else process remaining res block
+            Nothing -> process remaining res block
+        Nothing -> failit res >> putCVar block ()
 
     -- Record that a computation failed.
     failit res = atomically $ const () `liftM` tryPutCTMVar res Nothing
