@@ -151,11 +151,14 @@ work shortcircuit workitems = do
           maybea <- result fwrap
 
           case maybea of
-            Just a -> atomically $ do
-              val <- tryTakeCTMVar res
-              case val of
-                Just (Just as) -> putCTMVar res $ Just (a:as)
-                _ -> putCTMVar res $ Just [a]
+            Just a -> do
+              atomically $ do
+                val <- tryTakeCTMVar res
+                case val of
+                  Just (Just as) -> putCTMVar res $ Just (a:as)
+                  _ -> putCTMVar res $ Just [a]
+              unless shortcircuit $
+                process remaining res
             Nothing -> process remaining res
         Nothing -> failit res
 
