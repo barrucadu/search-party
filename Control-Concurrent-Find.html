@@ -25,6 +25,8 @@ window.onload = function () {pageLoad();setSynopsis("mini_Control-Concurrent-Fin
  behaviour.
 </p></td></tr><tr><td class="src">MonadConc m =&gt; Alternative (<a href="Control-Concurrent-Find.html#t:Find">Find</a> m)</td><td class="doc"><p><code>&lt;|&gt;</code> is a nondeterministic choice if both computations succeed,
  otherwise it returns the nonfailing one. If both fail, this fails.
+</p></td></tr><tr><td class="src">(MonadConc m, Monoid o) =&gt; Monoid (<a href="Control-Concurrent-Find.html#t:Find">Find</a> m o)</td><td class="doc"><p><code>mappend</code> performs both computations in parallel, blocking until
+ both complete.
 </p></td></tr></table></div></div></div><div class="top"><p class="src"><a name="v:runFind" class="def">runFind</a> :: MonadConc m =&gt; <a href="Control-Concurrent-Find.html#t:Find">Find</a> m a -&gt; m (Maybe a)<a href="src/Control-Concurrent-Find.html#runFind" class="link">Source</a></p><div class="doc"><p>Execute a <code><a href="Control-Concurrent-Find.html#t:Find">Find</a></code> computation, returning a <code>Just</code> value if there
  was at least one result (and a different value may be returned each
  time), or <code>Nothing</code> if there are no results.
