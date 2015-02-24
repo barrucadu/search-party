@@ -3,16 +3,21 @@ module Main where
 import Control.Concurrent.Find
 import Control.Monad.Conc.Class (MonadConc)
 import Control.Monad.Loops (andM)
-import Data.List (foldl')
+import Data.Char (ord)
+import Data.List (foldl', nub, sort)
 import Data.Maybe (listToMaybe)
 import System.Exit (exitSuccess, exitFailure)
 import Test.DejaFu (Predicate, dejafus, deadlocksNever, exceptionsNever, alwaysTrue)
+
+import Debug.Trace
 
 import qualified CountDown as C
 
 main :: IO ()
 main = do
-  pass <- andM [trees, countdown [16,8,3] 21]
+  pass <- andM [ trees
+              , countdown [16,8,3] 21
+              , hash 10 ["Bool", "Maybe", "Either", "Ordering", "Char", "String"]]
   if pass then exitSuccess else exitFailure
 
 --------------------------------------------------------------------------------
@@ -48,6 +53,26 @@ countdown ns n = dejafus (runFind $ solution ns n) $ cases "countdown" (\e -> C.
 solution :: MonadConc m => [Int] -> Int -> Find m C.Expr
 solution ns n = C.choices ns ? soln where
   soln ns' = listToMaybe [e | (e,m) <- C.results' ns', m == n]
+
+--------------------------------------------------------------------------------
+-- (hash): Finding perfect hash functions.
+
+hash :: Int -> [String] -> IO Bool
+hash maxgap keywords = dejafus (runFind $ [(i,j,f,g,h) | i <- [0..maximum (map length keywords)], j <- [0..maximum (map length keywords)], f <- [1..32], g <- [1..32], h <- [1..32]] ! check) $ cases "hash" check where
+
+  check h = perfect && positive && small where
+    perfect  = length (nub hashvals) == length keywords
+    positive = all (>=0) hashvals
+    small    = maximum (zipWith subtract (sort hashvals) (tail $ sort hashvals)) <= maxgap
+    hashvals = map (hash h) keywords
+
+  hash (i,j,f,g,h) keyword = ceiling $ f'*char1 * g'*char2 * h'*len where
+    char1 = fromIntegral . ord $ if i < length keyword then keyword !! i else '?'
+    char2 = fromIntegral . ord $ if j < length keyword then keyword !! j else '?'
+    len   = fromIntegral $ length keyword
+    f'    = fromIntegral f / 16
+    g'    = fromIntegral g / 16
+    h'    = fromIntegral h / 16
 
 --------------------------------------------------------------------------------
 -- Utility functions
