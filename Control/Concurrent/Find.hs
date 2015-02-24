@@ -13,6 +13,7 @@ module Control.Concurrent.Find
   , findIn, findIn'
   , findInMapped, findInMapped'
   , findBoth, findEither
+  , merging
   ) where
 
 import Control.Applicative (Applicative(..), Alternative(..), (<$>))
@@ -20,6 +21,7 @@ import Control.Concurrent.Find.Internal
 import Control.Monad (MonadPlus(..), void, liftM)
 import Control.Monad.Conc.Class (MonadConc)
 import Data.Maybe (isJust)
+import Data.Monoid (Monoid, mconcat, mempty)
 import System.IO.Unsafe (unsafePerformIO)
 
 -- | A value of type @Find m a@ represents a concurrent search
@@ -179,3 +181,15 @@ findBoth f g as bs = (,) <$> findIn f as <*> findIn g bs
 -- predicate. Both lists are searched in parallel.
 findEither :: MonadConc m => (a -> Bool) -> (b -> Bool) -> [a] -> [b] -> Find m (Either a b)
 findEither f g as bs = (Left <$> findIn f as) <|> (Right <$> findIn g bs)
+
+-- | Gather all non-failing results and 'mconcat' them together. The
+-- order of merging is nondeterministic, and so this is most likely to
+-- be useful in the context of gathering a list of results.
+--
+-- If there are likely to be many 'mempty' results, this is faster
+-- than
+--
+-- > fmap mconcat $ xs @? Just . f
+merging :: (MonadConc m, Monoid o, Eq o) => (a -> o) -> [a] -> Find m o
+merging f as = fmap mconcat $ as @? go where
+  go a = let o = f a in if o == mempty then Nothing else Just o
