@@ -21,7 +21,7 @@ import Control.Concurrent.Find.Internal
 import Control.Monad (MonadPlus(..), void, liftM)
 import Control.Monad.Conc.Class (MonadConc)
 import Data.Maybe (isJust)
-import Data.Monoid (Monoid, mconcat, mempty)
+import Data.Monoid (Monoid(..), mconcat, mempty)
 import System.IO.Unsafe (unsafePerformIO)
 
 -- | A value of type @Find m a@ represents a concurrent search
@@ -91,6 +91,23 @@ instance MonadConc m => Alternative (Find m) where
 instance MonadConc m => MonadPlus (Find m) where
   mzero = empty
   mplus = (<|>)
+
+-- | 'mappend' performs both computations in parallel, blocking until
+-- both complete.
+instance (MonadConc m, Monoid o) => Monoid (Find m o) where
+  mempty = fail ""
+  mappend (Find ma) (Find mb) = Find $ do
+    a <- ma
+    b <- mb
+    ares <- result a
+    bres <- result b
+
+    workItem' $
+      case (ares, bres) of
+        (Just a', Just b') -> Just $ a' `mappend` b'
+        (Just a', Nothing) -> Just a'
+        (Nothing, Just b') -> Just b'
+        (Nothing, Nothing) -> Nothing
 
 --------------------------------------------------------------------------------
 -- Execution
