@@ -29,7 +29,7 @@ git clone https://github.com/barrucadu/dejafu.git
 cd search-party
 cabal sandbox init
 cabal sandbox add-source ../dejafu
-cabal install --only-dependenciesa
+cabal install --only-dependencies
 cabal build
 ~~~~
 
