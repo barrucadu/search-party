@@ -41,6 +41,8 @@ window.onload = function () {pageLoad();setSynopsis("mini_Control-Concurrent-Fin
  which contains some values of type <code>a</code>.
 </p></div><div class="subs instances"><p id="control.i:Stream" class="caption collapser" onclick="toggleSection('i:Stream')">Instances</p><div id="section.i:Stream" class="show"><table><tr><td class="src">MonadConc m =&gt; Functor (<a href="Control-Concurrent-Find.html#t:Stream">Stream</a> m)</td><td class="doc"><p><code>fmap</code> delays applying the function until the values are
  demanded.
+</p></td></tr><tr><td class="src">MonadConc m =&gt; Applicative (<a href="Control-Concurrent-Find.html#t:Stream">Stream</a> m)</td><td class="doc"><p><code>&lt;*&gt;</code> acts like a zipping function, truncating when one stream
+ ends.
 </p></td></tr></table></div></div></div><div class="top"><p class="src"><a name="v:readStream" class="def">readStream</a> :: MonadConc m =&gt; <a href="Control-Concurrent-Find.html#t:Stream">Stream</a> m a -&gt; m (Maybe a)<a href="src/Control-Concurrent-Find.html#readStream" class="link">Source</a></p><div class="doc"><p>Read the head of stream, if the stream is finished <code>Nothing</code> will
  be returned.
 </p></div></div><div class="top"><p class="src"><a name="v:takeStream" class="def">takeStream</a> :: MonadConc m =&gt; Int -&gt; <a href="Control-Concurrent-Find.html#t:Stream">Stream</a> m a -&gt; m [a]<a href="src/Control-Concurrent-Find.html#takeStream" class="link">Source</a></p><div class="doc"><p>Take some values from the start of a stream, if the stream does
