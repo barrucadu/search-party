@@ -5,6 +5,13 @@ module Control.Concurrent.Find
   , runFind
   , unsafeRunFind
   , hasResult
+  -- * Result Streams
+  , Stream
+  , readStream
+  , takeStream
+  , unsafeReadStream
+  , gatherStream
+  , toFind
   -- * Basic Searches
   , success, failure
   , oneOf, allOf
@@ -19,9 +26,9 @@ module Control.Concurrent.Find
 import Control.Applicative (Applicative(..), Alternative(..), (<$>))
 import Control.Concurrent.Find.Internal
 import Control.Monad (MonadPlus(..), void, liftM)
-import Control.Monad.Conc.Class (MonadConc)
-import Data.Maybe (isJust)
-import Data.Monoid (Monoid(..), mconcat, mempty)
+import Control.Monad.Conc.Class (MonadConc, STMLike, atomically)
+import Data.Maybe (isJust, fromJust)
+import Data.Monoid (Monoid(..), mempty)
 import System.IO.Unsafe (unsafePerformIO)
 
 -- | A value of type @Find m a@ represents a concurrent search
@@ -35,6 +42,11 @@ import System.IO.Unsafe (unsafePerformIO)
 -- instance if you can, as the 'Applicative' preserves parallelism.
 newtype Find m a = Find { unFind :: m (WorkItem m a) }
 
+-- | A value of type @Stream m a@ represents a streaming sequence of
+-- results being computed concurrently in the 'MonadConc' monad @m@,
+-- which contains some values of type @a@.
+newtype Stream m a = Stream { unStream :: Chan (STMLike m) a }
+
 --------------------------------------------------------------------------------
 -- Instances
 
@@ -42,6 +54,11 @@ newtype Find m a = Find { unFind :: m (WorkItem m a) }
 -- to avoid blocking.
 instance MonadConc m => Functor (Find m) where
   fmap g (Find mf) = Find $ fmap g `liftM` mf
+
+-- | 'fmap' delays applying the function until the values are
+-- demanded.
+instance MonadConc m => Functor (Stream m) where
+  fmap f (Stream c) = Stream $ f <$> c
 
 -- | '<*>' performs both computations in parallel, and immediately
 -- fails as soon as one does, giving a symmetric short-circuiting
@@ -118,8 +135,8 @@ instance (MonadConc m, Monoid o) => Monoid (Find m o) where
 runFind :: MonadConc m => Find m a -> m (Maybe a)
 runFind (Find mf) = mf >>= result
 
--- | Unsafe version of 'runFind'. This will error at runtime if the
--- computation fails.
+-- | Unsafe version of 'runFind'. This will error if the computation
+-- fails.
 unsafeRunFind :: MonadConc m => Find m a -> m a
 unsafeRunFind (Find mf) = mf >>= unsafeResult
 
@@ -128,6 +145,42 @@ unsafeRunFind (Find mf) = mf >>= unsafeResult
 hasResult :: Find IO a -> Bool
 {-# NOINLINE hasResult #-}
 hasResult f = unsafePerformIO $ isJust `liftM` runFind f
+
+--------------------------------------------------------------------------------
+-- Result Streams
+
+-- | Read the head of stream, if the stream is finished 'Nothing' will
+-- be returned.
+readStream :: MonadConc m => Stream m a -> m (Maybe a)
+readStream stream = atomically . readChan . unChan $ unStream stream
+
+-- | Take some values from the start of a stream, if the stream does
+-- not contain that many elements, a shorter result list is returned.
+takeStream :: MonadConc m => Int -> Stream m a -> m [a]
+takeStream 0 _ = return []
+takeStream n stream = do
+  hd <- readStream stream
+  case hd of
+    Just a  -> (a:) `liftM` takeStream (n-1) stream
+    Nothing -> return []
+
+-- | Unsafe version of 'readStream'. This will error if the stream is
+-- empty.
+unsafeReadStream :: MonadConc m => Stream m a -> m a
+unsafeReadStream = liftM fromJust . readStream
+
+-- | Gather all the values of the stream together. This will block
+-- until the entire computation terminates.
+gatherStream :: (MonadConc m, Monoid o) => Stream m o -> m o
+gatherStream stream = go mempty where
+  go acc = readStream stream >>= maybe (return acc) (go . mappend acc)
+
+-- | Convert a 'Stream' to a 'Find'. This will block until the entire
+-- computation terminates.
+toFind :: MonadConc m => Stream m a -> Find m [a]
+toFind stream = Find $ do
+  as <- gatherStream $ (:[]) <$> stream
+  workItem' $ Just as
 
 --------------------------------------------------------------------------------
 -- Basic Searches
@@ -144,15 +197,20 @@ failure = fail ""
 oneOf :: MonadConc m => [Find m a] -> Find m a
 oneOf [] = failure
 oneOf as = Find $ do
-  (var, kill) <- work True $ map unFind as
-  return $ workItem var head kill
+  Left (var, kill) <- work False $ map unFind as
+  return $ workItem var id kill
 
 -- | Return all non-failing results, the order is nondeterministic.
-allOf :: MonadConc m => [Find m a] -> Find m [a]
-allOf [] = success []
-allOf as = Find $ do
-  (var, kill) <- work False $ map unFind as
-  return $ workItem var id kill
+allOf :: MonadConc m => [Find m a] -> m (Stream m a)
+allOf [] = do
+  c <- atomically newChan
+  atomically $ endChan c
+  return . Stream $ chan c
+
+allOf as = do
+  -- TODO: how to handle killing streaming computations?
+  Right c <- work True $ map unFind as
+  return . Stream $ chan c
 
 --------------------------------------------------------------------------------
 -- Combinators
@@ -166,11 +224,11 @@ allOf as = Find $ do
 (?) = flip findInMapped
 
 -- | Flipped infix version of 'findIn''.
-(@!) :: MonadConc m => [a] -> (a -> Bool) -> Find m [a]
+(@!) :: MonadConc m => [a] -> (a -> Bool) -> m (Stream m a)
 (@!) = flip findIn'
 
 -- | Flipped infix version of 'findInMapped''.
-(@?) :: MonadConc m => [a] -> (a -> Maybe b) -> Find m [b]
+(@?) :: MonadConc m => [a] -> (a -> Maybe b) -> m (Stream m b)
 (@?) = flip findInMapped'
 
 -- | Find an element of a list satisfying a predicate.
@@ -178,7 +236,7 @@ findIn :: MonadConc m => (a -> Bool) -> [a] -> Find m a
 findIn f as = oneOf [if f a then success a else failure | a <- as]
 
 -- | Variant of 'findIn' which returns all successes.
-findIn' :: MonadConc m => (a -> Bool) -> [a] -> Find m [a]
+findIn' :: MonadConc m => (a -> Bool) -> [a] -> m (Stream m a)
 findIn' f as = allOf [if f a then success a else failure | a <- as]
 
 -- | Find an element of a list after some transformation.
@@ -186,7 +244,7 @@ findInMapped :: MonadConc m => (a -> Maybe b) -> [a] -> Find m b
 findInMapped f = oneOf . map (maybe failure success . f)
 
 -- | Variant of 'findInMapped' which returns all 'Just's.
-findInMapped' :: MonadConc m => (a -> Maybe b) -> [a] -> Find m [b]
+findInMapped' :: MonadConc m => (a -> Maybe b) -> [a] -> m (Stream m b)
 findInMapped' f = allOf . map (maybe failure success . f)
 
 -- | Find elements from a pair of lists satisfying predicates. Both
@@ -208,5 +266,7 @@ findEither f g as bs = (Left <$> findIn f as) <|> (Right <$> findIn g bs)
 --
 -- > fmap mconcat $ xs @? Just . f
 merging :: (MonadConc m, Monoid o, Eq o) => (a -> o) -> [a] -> Find m o
-merging f as = fmap mconcat $ as @? go where
-  go a = let o = f a in if o == mempty then Nothing else Just o
+merging f as = Find $ do
+  stream <- as @? \a -> let o = f a in if o == mempty then Nothing else Just o
+  o <- gatherStream stream
+  workItem' $ Just o

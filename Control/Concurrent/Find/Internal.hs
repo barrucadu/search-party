@@ -4,8 +4,8 @@
 -- | The guts of the Find monad.
 module Control.Concurrent.Find.Internal where
 
-import Control.Concurrent.STM.CTMVar (CTMVar, newEmptyCTMVar, newCTMVar, readCTMVar, isEmptyCTMVar, putCTMVar, tryPutCTMVar, tryTakeCTMVar)
-import Control.Monad (liftM, unless, when)
+import Control.Concurrent.STM.CTMVar
+import Control.Monad (liftM, unless)
 import Control.Monad.Conc.Class
 import Control.Monad.STM.Class
 import Data.Maybe (fromJust, isNothing)
@@ -49,6 +49,39 @@ workItem res mapp kill = wrap $ WorkItem' res mapp kill where
 -- | Construct a 'WorkItem' containing a result.
 workItem' :: MonadConc m => Maybe a -> m (WorkItem m a)
 workItem' a = (\v -> workItem v id $ return ()) `liftM` atomically (newCTMVar a)
+
+-- | A channel containing values of type @a@.
+newtype Chan m a = Chan { unChan :: forall x. Chan' m x a }
+
+-- | A channel containing values of type @x@, which will be
+-- transformed to type @a@ when read.
+data Chan' m x a = Chan'
+  { _closed    :: CTMVar m Bool
+  -- ^ Whether the channel has been closed or not.
+  , _builder   :: Maybe (m (Maybe x))
+  -- ^ If 'Just', this can't be written to, and the builder action is
+  -- executed on read.
+  --
+  -- TODO: unify '_builder' and '_readHead'.
+  , _readHead  :: CTMVar m (CStream m x)
+  -- ^ The read head of the channel.
+  , _writeHead :: CTMVar m (CStream m x)
+  -- ^ The write head of the channel.
+  , _cmapped   :: x -> a
+  -- ^ The post-processing.
+  }
+
+instance Functor (Chan m) where
+  fmap f (Chan c) = Chan $ c { _cmapped = f . _cmapped c }
+
+type CStream m x = CTMVar m (SItem m x)
+data SItem m x = SItem x (CStream m x)
+
+-- | Construct a 'Chan'.
+chan :: Chan' m x a -> Chan m a
+chan = wrap where
+  wrap :: Chan' m x a -> Chan m a
+  wrap = Chan . unsafeCoerce
 
 --------------------------------------------------------------------------------
 -- Processing work items
@@ -102,6 +135,60 @@ hasFailed f = do
   else isNothing `liftM` readCTMVar (_result $ unWrap f)
 
 --------------------------------------------------------------------------------
+-- Processing streams
+
+-- | Create a new channel.
+newChan :: MonadSTM m => m (Chan' m x x)
+newChan = do
+  hole      <- newEmptyCTMVar
+  readHead  <- newCTMVar hole
+  writeHead <- newCTMVar hole
+  open      <- newCTMVar False
+  return $ Chan' open Nothing readHead writeHead id
+
+-- | Create a new channel with a builder.
+newBuilderChan :: MonadSTM m => m (Maybe x) -> m (Chan' m x x)
+newBuilderChan mx = do
+  c <- newChan
+  endChan c
+  return $ c { _builder = Just mx }
+
+-- | Get the head of a channel.
+readChan :: MonadSTM m => Chan' m x a -> m (Maybe a)
+readChan c = do
+  closed <- readCTMVar $ _closed c
+  case (_builder c, closed) of
+    -- Use builder function
+    (Just bldr, _) -> do
+      val <- bldr
+      return $ _cmapped c `fmap` val
+
+    -- Read head of chan
+    (Nothing, False) -> do
+      stream <- takeCTMVar $ _readHead c
+      SItem x rest <- takeCTMVar stream
+      putCTMVar (_readHead c) rest
+      return . Just $ _cmapped c x
+
+    -- Channel closed
+    (Nothing, True) -> return Nothing
+
+-- | Append to a channel. If the channel has been closed, this drops
+-- writes.
+writeChan :: MonadSTM m => Chan' m x a -> x -> m ()
+writeChan c x = do
+  closed <- readCTMVar $ _closed c
+  unless closed $ do
+    newHole <- newEmptyCTMVar
+    oldHole <- takeCTMVar $ _writeHead c
+    putCTMVar oldHole (SItem x newHole)
+    putCTMVar (_writeHead c) newHole
+
+-- | End a channel.
+endChan :: MonadSTM m => Chan' m x a -> m ()
+endChan c = const () `liftM` swapCTMVar (_closed c) True
+
+--------------------------------------------------------------------------------
 -- Work stealing
 
 -- | Push a batch of work to the queue, returning a 'CTMVar' that can
@@ -109,72 +196,61 @@ hasFailed f = do
 -- kill the computation. If the first argument is true, as soon as one
 -- succeeds, the others are killed; otherwise all results are
 -- gathered.
-work :: MonadConc m => Bool -> [m (WorkItem m a)] -> m (CTMVar (STMLike m) (Maybe [a]), m ())
-work shortcircuit workitems = do
-  res    <- atomically newEmptyCTMVar
-  kill   <- atomically newEmptyCTMVar
-  caps   <- getNumCapabilities
+work :: MonadConc m
+     => Bool -> [m (WorkItem m a)] -> m (Either (CTMVar (STMLike m) (Maybe a), m ()) (Chan' (STMLike m) a a))
+work streaming workitems = do
+  kill <- atomically newEmptyCTMVar
+  caps <- getNumCapabilities
+
+  res <- if streaming
+        then Right `liftM` atomically newChan
+        else Left  `liftM` atomically newEmptyCTMVar
+
   dtid   <- fork $ driver caps res kill
   killme <- atomically $ readCTMVar kill
 
-  return (res, killme >> killThread dtid)
+  return $ case res of
+    Left ctmvar -> Left (ctmvar, killme >> killThread dtid)
+    Right chan  -> Right chan
 
   where
     -- If there's only one capability don't bother with threads.
     driver 1 res kill = do
-      tmp <- if shortcircuit then return res else atomically newEmptyCTMVar
-      block <- newEmptyCVar
       atomically . putCTMVar kill $ failit res
       remaining <- newCRef workitems
-      process remaining tmp block
-      atomically $ readCTMVar tmp >>= putCTMVar res
+      process remaining res
 
     -- Fork off as many threads as there are capabilities, and queue
     -- up the remaining work.
     driver caps res kill = do
-      tmp <- if shortcircuit then return res else atomically newEmptyCTMVar
       remaining <- newCRef workitems
-      blocks <- mapM (const newEmptyCVar) [0..caps-1]
-      tids <- mapM (\(cap, block) -> forkOn cap $ process remaining tmp block) $ zip [0..caps-1] blocks
+      tids <- mapM (\cap -> forkOn cap $ process remaining res) [1..caps]
 
       -- Construct an action to short-circuit the computation.
       atomically . putCTMVar kill $ failit res >> mapM_ killThread tids
 
-      -- If short-circuiting, block until there is a result then kill
-      -- any still-running threads.
-      when shortcircuit $ do
-        _ <- atomically $ readCTMVar tmp
-        mapM_ killThread tids
-
-      -- Block until all threads are terminated, and then save the
-      -- result.
-      mapM_ readCVar blocks
-      atomically $ readCTMVar tmp >>= putCTMVar res
+      -- If not streaming, block until there is a result then kill any
+      -- still-running threads.
+      case res of
+        Left ctmvar -> atomically (readCTMVar ctmvar) >> mapM_ killThread tids
+        _ -> return ()
 
     -- Process a work item and store the result if it is a success,
     -- otherwise continue.
-    process remaining res block = do
+    process :: MonadConc m => CRef m [m (WorkItem m a)] -> Either (CTMVar (STMLike m) (Maybe a)) (Chan' (STMLike m) a a) -> m ()
+    process remaining res = do
       mitem <- modifyCRef remaining $ \rs -> if null rs then ([], Nothing) else (tail rs, Just $ head rs)
       case mitem of
         Just item -> do
           fwrap  <- item
           maybea <- result fwrap
 
-          case maybea of
-            Just a -> do
-              atomically $ do
-                val <- tryTakeCTMVar res
-                case val of
-                  Just (Just as) -> putCTMVar res $ Just (a:as)
-                  _ -> putCTMVar res $ Just [a]
-
-              -- If short-circuiting, indicate termination, otherwise
-              -- loop.
-              if shortcircuit
-              then putCVar block ()
-              else process remaining res block
-            Nothing -> process remaining res block
-        Nothing -> failit res >> putCVar block ()
+          case (maybea, res) of
+            (Just a, Right chan)  -> atomically (writeChan chan a) >> process remaining res
+            (Just a, Left ctmvar) -> atomically . putCTMVar ctmvar $ Just a
+            _ -> process remaining res
+        Nothing -> failit res
 
     -- Record that a computation failed.
-    failit res = atomically $ const () `liftM` tryPutCTMVar res Nothing
+    failit (Left ctmvar) = atomically $ const () `liftM` tryPutCTMVar ctmvar Nothing
+    failit (Right chan)  = atomically $ endChan chan
