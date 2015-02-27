@@ -4,8 +4,9 @@
 -- | The guts of the Find monad.
 module Control.Concurrent.Find.Internal where
 
+import Control.Concurrent.STM.CTVar (modifyCTVar')
 import Control.Concurrent.STM.CTMVar
-import Control.Monad (liftM, unless)
+import Control.Monad (liftM, unless,)
 import Control.Monad.Conc.Class
 import Control.Monad.STM.Class
 import Data.Maybe (fromJust, isNothing)
@@ -56,13 +57,10 @@ newtype Chan m a = Chan { unChan :: forall x. Chan' m x a }
 -- | A channel containing values of type @x@, which will be
 -- transformed to type @a@ when read.
 data Chan' m x a = Chan'
-  { _closed    :: CTMVar m Bool
+  { _closed    :: CTVar m Bool
   -- ^ Whether the channel has been closed or not.
-  , _builder   :: Maybe (m (Maybe x))
-  -- ^ If 'Just', this can't be written to, and the builder action is
-  -- executed on read.
-  --
-  -- TODO: unify '_builder' and '_readHead'.
+  , _remaining :: CTVar m Int
+  -- ^ Number of things to compute before pausing the threads.
   , _readHead  :: CTMVar m (CStream m x)
   -- ^ The read head of the channel.
   , _writeHead :: CTMVar m (CStream m x)
@@ -143,41 +141,42 @@ newChan = do
   hole      <- newEmptyCTMVar
   readHead  <- newCTMVar hole
   writeHead <- newCTMVar hole
-  open      <- newCTMVar False
-  return $ Chan' open Nothing readHead writeHead id
+  closed    <- newCTVar False
+  remaining <- newCTVar 100
+  return $ Chan' closed remaining readHead writeHead id
 
--- | Create a new channel with a builder.
-newBuilderChan :: MonadSTM m => m (Maybe x) -> m (Chan' m x x)
-newBuilderChan mx = do
-  c <- newChan
-  endChan c
-  return $ c { _builder = Just mx }
-
--- | Get the head of a channel.
-readChan :: MonadSTM m => Chan' m x a -> m (Maybe a)
+-- | Get the head of a channel. @Nothing@ indicates that the
+-- computation was paused and there was no result, but that it has
+-- been resumed and should be tried again.
+readChan :: MonadSTM m => Chan' m x a -> m (Maybe (Maybe a))
 readChan c = do
-  closed <- readCTMVar $ _closed c
-  case (_builder c, closed) of
-    -- Use builder function
-    (Just bldr, _) -> do
-      val <- bldr
-      return $ _cmapped c `fmap` val
-
-    -- Read head of chan
-    (Nothing, False) -> do
-      stream <- takeCTMVar $ _readHead c
-      SItem x rest <- takeCTMVar stream
-      putCTMVar (_readHead c) rest
-      return . Just $ _cmapped c x
-
-    -- Channel closed
-    (Nothing, True) -> return Nothing
+  closed    <- readCTVar $ _closed c
+  remaining <- readCTVar $ _remaining c
+  -- If closed, stop here
+  if closed
+  then return $ Just Nothing
+  else do
+    stream <- takeCTMVar $ _readHead c
+    item   <- tryTakeCTMVar stream
+    -- Try reading an item, if there is one, return it. If paused,
+    -- resume the computation and return an indication; otherwise,
+    -- block until there is a result.
+    case item of
+      Just (SItem x rest) -> do
+        putCTMVar (_readHead c) rest
+        return . Just . Just $ _cmapped c x
+      Nothing
+        | remaining == 0 -> do
+          putCTMVar (_readHead c) stream
+          writeCTVar (_remaining c) 100
+          return Nothing
+        | otherwise -> retry
 
 -- | Append to a channel. If the channel has been closed, this drops
 -- writes.
 writeChan :: MonadSTM m => Chan' m x a -> x -> m ()
 writeChan c x = do
-  closed <- readCTMVar $ _closed c
+  closed <- readCTVar $ _closed c
   unless closed $ do
     newHole <- newEmptyCTMVar
     oldHole <- takeCTMVar $ _writeHead c
@@ -186,16 +185,14 @@ writeChan c x = do
 
 -- | End a channel.
 endChan :: MonadSTM m => Chan' m x a -> m ()
-endChan c = const () `liftM` swapCTMVar (_closed c) True
+endChan c = writeCTVar (_closed c) True
 
 --------------------------------------------------------------------------------
 -- Work stealing
 
--- | Push a batch of work to the queue, returning a 'CTMVar' that can
--- be blocked on to get the result, and an action that can be used to
--- kill the computation. If the first argument is true, as soon as one
--- succeeds, the others are killed; otherwise all results are
--- gathered.
+-- | Push a batch of work to the queue. If streaming, return a
+-- channel, if not, return a 'CTMVar' that can be blocked on to get
+-- the result, and an action to kill the computation.
 work :: MonadConc m
      => Bool -> [m (WorkItem m a)] -> m (Either (CTMVar (STMLike m) (Maybe a), m ()) (Chan' (STMLike m) a a))
 work streaming workitems = do
@@ -210,14 +207,14 @@ work streaming workitems = do
   killme <- atomically $ readCTMVar kill
 
   return $ case res of
-    Left ctmvar -> Left (ctmvar, killme >> killThread dtid)
+    Left ctmvar -> Left  (ctmvar, killme >> killThread dtid)
     Right chan  -> Right chan
 
   where
     -- If there's only one capability don't bother with threads.
     driver 1 res kill = do
-      atomically . putCTMVar kill $ failit res
       remaining <- newCRef workitems
+      atomically . putCTMVar kill $ failit res
       process remaining res
 
     -- Fork off as many threads as there are capabilities, and queue
@@ -237,16 +234,20 @@ work streaming workitems = do
 
     -- Process a work item and store the result if it is a success,
     -- otherwise continue.
-    process :: MonadConc m => CRef m [m (WorkItem m a)] -> Either (CTMVar (STMLike m) (Maybe a)) (Chan' (STMLike m) a a) -> m ()
     process remaining res = do
       mitem <- modifyCRef remaining $ \rs -> if null rs then ([], Nothing) else (tail rs, Just $ head rs)
       case mitem of
         Just item -> do
+          -- If streaming, and the buffer is full, block.
+          atomically $ case res of
+            Right chan -> readCTVar (_remaining chan) >>= check . (/= 0)
+            _ -> return ()
+
           fwrap  <- item
           maybea <- result fwrap
 
           case (maybea, res) of
-            (Just a, Right chan)  -> atomically (writeChan chan a) >> process remaining res
+            (Just a, Right chan)  -> atomically (writeChan chan a >> modifyCTVar' (_remaining chan) (subtract 1)) >> process remaining res
             (Just a, Left ctmvar) -> atomically . putCTMVar ctmvar $ Just a
             _ -> process remaining res
         Nothing -> failit res

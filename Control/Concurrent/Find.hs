@@ -152,7 +152,13 @@ hasResult f = unsafePerformIO $ isJust `liftM` runFind f
 -- | Read the head of stream, if the stream is finished 'Nothing' will
 -- be returned.
 readStream :: MonadConc m => Stream m a -> m (Maybe a)
-readStream stream = atomically . readChan . unChan $ unStream stream
+readStream stream = do
+  res <- atomically . readChan . unChan $ unStream stream
+  case res of
+    Just x  -> return x
+    -- If there is a 'Nothing', the computation was paused but has
+    -- been resumed, so we can now definitely get a result.
+    Nothing -> liftM fromJust . atomically . readChan . unChan $ unStream stream
 
 -- | Take some values from the start of a stream, if the stream does
 -- not contain that many elements, a shorter result list is returned.
@@ -208,7 +214,8 @@ allOf [] = do
   return . Stream $ chan c
 
 allOf as = do
-  -- TODO: how to handle killing streaming computations?
+  -- Streaming computations don't really short-circuit, they just
+  -- block when there are enough items in the stream.
   Right c <- work True $ map unFind as
   return . Stream $ chan c
 
