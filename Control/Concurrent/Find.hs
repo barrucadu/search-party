@@ -81,6 +81,21 @@ instance MonadConc m => Applicative (Find m) where
 
     else workItem' Nothing
 
+-- | '<*>' acts like a zipping function, truncating when one stream
+-- ends.
+instance MonadConc m => Applicative (Stream m) where
+  pure a = Stream $ builderChan (return . Just $ Just a)
+
+  (Stream sf) <*> (Stream sa) = Stream . builderChan $ do
+    f <- readChan $ unChan sf
+    a <- readChan $ unChan sa
+
+    return $ case (f, a) of
+      (Just (Just f'), Just (Just a')) -> Just . Just $ f' a'
+      (Just Nothing, _) -> Just Nothing
+      (_, Just Nothing) -> Just Nothing
+      _ -> Nothing
+
 -- | '>>=' should be avoided, as it necessarily imposes sequencing,
 -- and blocks until the value being bound has been computed.
 instance MonadConc m => Monad (Find m) where

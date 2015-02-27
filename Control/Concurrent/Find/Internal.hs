@@ -56,20 +56,29 @@ newtype Chan m a = Chan { unChan :: forall x. Chan' m x a }
 
 -- | A channel containing values of type @x@, which will be
 -- transformed to type @a@ when read.
-data Chan' m x a = Chan'
-  { _closed    :: CTVar m Bool
-  -- ^ Whether the channel has been closed or not.
-  , _remaining :: CTVar m Int
-  -- ^ Number of things to compute before pausing the threads.
-  , _readHead  :: CTMVar m (CStream m x)
-  -- ^ The read head of the channel.
-  , _writeHead :: CTMVar m (CStream m x)
-  -- ^ The write head of the channel.
-  , _cmapped   :: x -> a
-  -- ^ The post-processing.
-  }
+data Chan' m x a
+  = BuilderChan'
+    { _builder :: m (Maybe (Maybe x))
+    -- ^ Function to produce a new value.
+    , _bmapped :: x -> a
+    -- ^ The post-processing.
+    }
+
+  | Chan'
+    { _closed    :: CTVar m Bool
+    -- ^ Whether the channel has been closed or not.
+    , _remaining :: CTVar m Int
+    -- ^ Number of things to compute before pausing the threads.
+    , _readHead  :: CTMVar m (CStream m x)
+    -- ^ The read head of the channel.
+    , _writeHead :: CTMVar m (CStream m x)
+    -- ^ The write head of the channel.
+    , _cmapped   :: x -> a
+    -- ^ The post-processing.
+    }
 
 instance Functor (Chan m) where
+  fmap f (Chan b@(BuilderChan' _ _)) = Chan $ b { _bmapped = f . _bmapped b }
   fmap f (Chan c) = Chan $ c { _cmapped = f . _cmapped c }
 
 type CStream m x = CTMVar m (SItem m x)
@@ -80,6 +89,10 @@ chan :: Chan' m x a -> Chan m a
 chan = wrap where
   wrap :: Chan' m x a -> Chan m a
   wrap = Chan . unsafeCoerce
+
+-- | Construct a builder 'Chan'.
+builderChan :: m (Maybe (Maybe x)) -> Chan m x
+builderChan mx = chan $ BuilderChan' mx id
 
 --------------------------------------------------------------------------------
 -- Processing work items
@@ -149,6 +162,12 @@ newChan = do
 -- computation was paused and there was no result, but that it has
 -- been resumed and should be tried again.
 readChan :: MonadSTM m => Chan' m x a -> m (Maybe (Maybe a))
+readChan b@(BuilderChan' _ _) = do
+  x <- _builder b
+  case x of
+    Just x' -> return . Just $ _bmapped b `fmap` x'
+    Nothing -> return Nothing
+
 readChan c = do
   closed    <- readCTVar $ _closed c
   remaining <- readCTVar $ _remaining c
@@ -175,6 +194,7 @@ readChan c = do
 -- | Append to a channel. If the channel has been closed, this drops
 -- writes.
 writeChan :: MonadSTM m => Chan' m x a -> x -> m ()
+writeChan (BuilderChan' _ _) _ = return ()
 writeChan c x = do
   closed <- readCTVar $ _closed c
   unless closed $ do
@@ -185,6 +205,7 @@ writeChan c x = do
 
 -- | End a channel.
 endChan :: MonadSTM m => Chan' m x a -> m ()
+endChan (BuilderChan' _ _) = return ()
 endChan c = writeCTVar (_closed c) True
 
 --------------------------------------------------------------------------------
