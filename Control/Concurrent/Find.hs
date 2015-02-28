@@ -133,11 +133,11 @@ instance (MonadConc m, Monoid o) => Monoid (Find m o) where
         (Nothing, Just b') -> Just b'
         (Nothing, Nothing) -> Nothing
 
--- | 'mappend' acts like a zipping function, extending with 'mempty'
--- when one stream ends.
+-- | 'mappend' acts like a zipping function, truncating when one
+-- stream ends.
 instance (MonadConc m, Monoid o) => Monoid (Stream m o) where
-  mempty  = Stream $ builderChan (return Nothing)
-  mappend = zipStream mappend (Just mempty) (Just mempty)
+  mempty = pure mempty
+  mappend sa sb = mappend <$> sa <*> sb
 
 --------------------------------------------------------------------------------
 -- Execution
