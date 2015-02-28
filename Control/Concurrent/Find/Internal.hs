@@ -228,8 +228,8 @@ work streaming workitems = do
   killme <- atomically $ readCTMVar kill
 
   return $ case res of
-    Left ctmvar -> Left  (ctmvar, killme >> killThread dtid)
-    Right chan  -> Right chan
+    Left  var -> Left  (var, killme >> killThread dtid)
+    Right chn -> Right chn
 
   where
     -- If there's only one capability don't bother with threads.
@@ -261,18 +261,18 @@ work streaming workitems = do
         Just item -> do
           -- If streaming, and the buffer is full, block.
           atomically $ case res of
-            Right chan -> readCTVar (_remaining chan) >>= check . (/= 0)
+            Right chn -> readCTVar (_remaining chn) >>= check . (/= 0)
             _ -> return ()
 
           fwrap  <- item
           maybea <- result fwrap
 
           case (maybea, res) of
-            (Just a, Right chan)  -> atomically (writeChan chan a >> modifyCTVar' (_remaining chan) (subtract 1)) >> process remaining res
-            (Just a, Left ctmvar) -> atomically . putCTMVar ctmvar $ Just a
+            (Just a, Right chn)  -> atomically (writeChan chn a >> modifyCTVar' (_remaining chn) (subtract 1)) >> process remaining res
+            (Just a, Left  var) -> atomically . putCTMVar var $ Just a
             _ -> process remaining res
         Nothing -> failit res
 
     -- Record that a computation failed.
-    failit (Left ctmvar) = atomically $ const () `liftM` tryPutCTMVar ctmvar Nothing
-    failit (Right chan)  = atomically $ endChan chan
+    failit (Left  var) = atomically $ const () `liftM` tryPutCTMVar var Nothing
+    failit (Right chn) = atomically $ endChan chn

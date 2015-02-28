@@ -71,9 +71,9 @@ instance MonadConc m => Applicative (Find m) where
     f <- mf
     a <- ma
 
-    success <- blockOn [void f, void a]
+    completed <- blockOn [void f, void a]
 
-    if success
+    if completed
     then do
       fres <- unsafeResult f
       ares <- unsafeResult a
@@ -198,14 +198,14 @@ gatherStream stream = go mempty where
 -- a component stream runs out. If no value is given, the resulting
 -- stream ends as soon as that component stream does.
 zipStream :: MonadConc m => (a -> b -> c) -> Maybe a -> Maybe b -> Stream m a -> Stream m b -> Stream m c
-zipStream zip fillera fillerb (Stream sa) (Stream sb) = Stream . builderChan $ do
+zipStream f fillera fillerb (Stream sa) (Stream sb) = Stream . builderChan $ do
     a <- readChan $ unChan sa
     b <- readChan $ unChan sb
 
     return $ case (a, b) of
-      (Just (Just a'), Just (Just b')) -> Just . Just $ zip a' b'
-      (Just (Just a'), Just Nothing) -> Just $ zip <$> Just a' <*> fillerb
-      (Just Nothing, Just (Just b')) -> Just $ zip <$> fillera <*> Just b'
+      (Just (Just a'), Just (Just b')) -> Just . Just $ f a' b'
+      (Just (Just a'), Just Nothing) -> Just $ f <$> Just a' <*> fillerb
+      (Just Nothing, Just (Just b')) -> Just $ f <$> fillera <*> Just b'
       (Just Nothing, Just Nothing) -> Just Nothing
       _ -> Nothing
 
