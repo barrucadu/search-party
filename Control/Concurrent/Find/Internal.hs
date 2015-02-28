@@ -6,7 +6,7 @@ module Control.Concurrent.Find.Internal where
 
 import Control.Concurrent.STM.CTVar (modifyCTVar')
 import Control.Concurrent.STM.CTMVar
-import Control.Monad (liftM, unless,)
+import Control.Monad (liftM, unless, when)
 import Control.Monad.Conc.Class
 import Control.Monad.STM.Class
 import Data.Maybe (fromJust, isNothing)
@@ -58,7 +58,7 @@ newtype Chan m a = Chan { unChan :: forall x. Chan' m x a }
 -- transformed to type @a@ when read.
 data Chan' m x a
   = BuilderChan'
-    { _builder :: m (Maybe (Maybe x))
+    { _builder :: m (Maybe x)
     -- ^ Function to produce a new value.
     , _bmapped :: x -> a
     -- ^ The post-processing.
@@ -93,7 +93,7 @@ chan = wrap where
   wrap = Chan . unsafeCoerce
 
 -- | Construct a builder 'Chan'.
-builderChan :: m (Maybe (Maybe x)) -> Chan m x
+builderChan :: m (Maybe x) -> Chan m x
 builderChan mx = chan $ BuilderChan' mx id
 
 --------------------------------------------------------------------------------
@@ -164,36 +164,28 @@ newChan = do
 -- | Get the head of a channel. @Nothing@ indicates that the
 -- computation was paused and there was no result, but that it has
 -- been resumed and should be tried again.
-readChan :: MonadSTM m => Chan' m x a -> m (Maybe (Maybe a))
+readChan :: MonadSTM m => Chan' m x a -> m (Maybe a)
 readChan b@(BuilderChan' _ _) = do
-  x <- _builder b
-  case x of
-    Just x' -> return . Just $ _bmapped b `fmap` x'
-    Nothing -> return Nothing
-
+  item <- _builder b
+  return $ _bmapped b `fmap` item
 readChan c = do
   closed    <- readCTVar $ _closed c
   remaining <- readCTVar $ _remaining c
   -- If closed, stop here
   if closed
-  then return $ Just Nothing
+  then return Nothing
   else do
     stream <- takeCTMVar $ _readHead c
-    item   <- tryTakeCTMVar stream
-    -- Try reading an item, if there is one, return it. If paused,
-    -- resume the computation and return an indication; otherwise,
-    -- block until there is a result.
-    case item of
-      Just (SItem x rest) -> do
-        writeCTVar (_last c) $ Just x
-        putCTMVar (_readHead c) rest
-        return . Just . Just $ _cmapped c x
-      Nothing
-        | remaining == 0 -> do
-          putCTMVar (_readHead c) stream
-          writeCTVar (_remaining c) 100
-          return Nothing
-        | otherwise -> retry
+    SItem x rest <- takeCTMVar stream
+    putCTMVar (_readHead c) rest
+
+    -- Allow for ungetting
+    writeCTVar (_last c) $ Just x
+
+    -- Maintain the buffer
+    when (remaining < 50) $ writeCTVar (_remaining c) 100
+
+    return . Just $ _cmapped c x
 
 -- | Undo the last read.
 unGetChan :: MonadSTM m => Chan' m x a -> m ()

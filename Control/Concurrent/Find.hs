@@ -85,7 +85,7 @@ instance MonadConc m => Applicative (Find m) where
 -- | '<*>' acts like a zipping function, truncating when one stream
 -- ends.
 instance MonadConc m => Applicative (Stream m) where
-  pure a    = Stream $ builderChan (return . Just $ Just a)
+  pure a    = Stream $ builderChan (return $ Just a)
   sf <*> sa = zipStream ($) Nothing Nothing sf sa
 
 -- | '>>=' should be avoided, as it necessarily imposes sequencing,
@@ -136,7 +136,7 @@ instance (MonadConc m, Monoid o) => Monoid (Find m o) where
 -- | 'mappend' acts like a zipping function, extending with 'mempty'
 -- when one stream ends.
 instance (MonadConc m, Monoid o) => Monoid (Stream m o) where
-  mempty  = Stream $ builderChan (return $ Just Nothing)
+  mempty  = Stream $ builderChan (return Nothing)
   mappend = zipStream mappend (Just mempty) (Just mempty)
 
 --------------------------------------------------------------------------------
@@ -165,12 +165,7 @@ hasResult f = unsafePerformIO $ isJust `liftM` runFind f
 -- | Read the head of stream, if the stream is finished 'Nothing' will
 -- be returned.
 readStream :: MonadConc m => Stream m a -> m (Maybe a)
-readStream stream = do
-  res <- atomically . readChan . unChan $ unStream stream
-  case res of
-    Just x  -> return x
-    -- If this results in an infinite loop, I have a bug somewhere...
-    Nothing -> readStream stream
+readStream stream = atomically . readChan . unChan $ unStream stream
 
 -- | Take some values from the start of a stream, if the stream does
 -- not contain that many elements, a shorter result list is returned.
@@ -201,40 +196,25 @@ zipStream f fillera fillerb (Stream sa) (Stream sb) = Stream . builderChan $ do
     a <- readChan $ unChan sa
     b <- readChan $ unChan sb
 
-    let endOfStream = return $ Just Nothing
-    let tryAgain    = return Nothing
+    let zipped x y  = return . Just $ f x y
+    let endOfStream = return Nothing
 
     case (a, b) of
       -- If both streams have a value, apply the function
-      (Just (Just a'), Just (Just b')) -> return . Just . Just $ f a' b'
+      (Just a', Just b') -> zipped a' b'
 
       -- If one stream has a value and the other is empty, fill in the
       -- blank. If there is no filler, push the value just received
       -- back to the stream and indicate the end.
-      (Just (Just a'), Just Nothing)
-        | isJust fillerb -> return . Just $ f <$> Just a' <*> fillerb
-        | otherwise      -> unGetChan (unChan sa) >> endOfStream
-      (Just Nothing, Just (Just b'))
-        | isJust fillera -> return . Just $ f <$> fillera <*> Just b'
-        | otherwise      -> unGetChan (unChan sb) >> endOfStream
+      (Just a', Nothing) -> case fillerb of
+        Just b' -> zipped a' b'
+        Nothing -> unGetChan (unChan sa) >> endOfStream
+      (Nothing, Just b') -> case fillera of
+        Just a' -> zipped a' b'
+        Nothing -> unGetChan (unChan sb) >> endOfStream
 
       -- If both streams are empty, empty.
-      (Just Nothing, Just Nothing) -> return $ Just Nothing
-
-      -- If one stream needs further work, push the value just read
-      -- back to the channel and indicate a re-read is necessary.
-      (Just (Just _), Nothing) -> unGetChan (unChan sa) >> tryAgain
-      (Nothing, Just (Just _)) -> unGetChan (unChan sb) >> tryAgain
-      (Just Nothing, Nothing)
-        | isJust fillera -> tryAgain
-        | otherwise      -> endOfStream
-      (Nothing, Just Nothing)
-        | isJust fillerb -> tryAgain
-        | otherwise      -> endOfStream
-
-      -- If both streams need further work, indicate a re-read is
-      -- necessary.
-      (Nothing, Nothing) -> tryAgain
+      (Nothing, Nothing) -> endOfStream
 
 -- | Convert a 'Stream' to a 'Find'. This will block until the entire
 -- computation terminates.
