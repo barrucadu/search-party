@@ -71,6 +71,8 @@ data Chan' m x a
     -- ^ Number of things to compute before pausing the threads.
     , _readHead  :: CTMVar m (CStream m x)
     -- ^ The read head of the channel.
+    , _last      :: CTVar m (Maybe x)
+    -- ^ The last thing read, allowing reads to be undone.
     , _writeHead :: CTMVar m (CStream m x)
     -- ^ The write head of the channel.
     , _cmapped   :: x -> a
@@ -153,10 +155,11 @@ newChan :: MonadSTM m => m (Chan' m x x)
 newChan = do
   hole      <- newEmptyCTMVar
   readHead  <- newCTMVar hole
+  thelast   <- newCTVar Nothing
   writeHead <- newCTMVar hole
   closed    <- newCTVar False
   remaining <- newCTVar 100
-  return $ Chan' closed remaining readHead writeHead id
+  return $ Chan' closed remaining readHead thelast writeHead id
 
 -- | Get the head of a channel. @Nothing@ indicates that the
 -- computation was paused and there was no result, but that it has
@@ -182,6 +185,7 @@ readChan c = do
     -- block until there is a result.
     case item of
       Just (SItem x rest) -> do
+        writeCTVar (_last c) $ Just x
         putCTMVar (_readHead c) rest
         return . Just . Just $ _cmapped c x
       Nothing
@@ -190,6 +194,20 @@ readChan c = do
           writeCTVar (_remaining c) 100
           return Nothing
         | otherwise -> retry
+
+-- | Undo the last read.
+unGetChan :: MonadSTM m => Chan' m x a -> m ()
+unGetChan (BuilderChan' _ _) = return ()
+unGetChan c = do
+  oldHead <- takeCTMVar $ _readHead c
+  thelast <- readCTVar  $ _last c
+  case thelast of
+    Just x -> do
+      writeCTVar (_last c) Nothing
+      newHead <- newCTMVar $ SItem x oldHead
+      putCTMVar (_readHead c) newHead
+    Nothing ->
+      putCTMVar (_readHead c) oldHead
 
 -- | Append to a channel. If the channel has been closed, this drops
 -- writes.
