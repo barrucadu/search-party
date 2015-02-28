@@ -11,6 +11,7 @@ module Control.Concurrent.Find
   , takeStream
   , unsafeReadStream
   , gatherStream
+  , zipStream
   , toFind
   -- * Basic Searches
   , success, failure
@@ -84,17 +85,8 @@ instance MonadConc m => Applicative (Find m) where
 -- | '<*>' acts like a zipping function, truncating when one stream
 -- ends.
 instance MonadConc m => Applicative (Stream m) where
-  pure a = Stream $ builderChan (return . Just $ Just a)
-
-  (Stream sf) <*> (Stream sa) = Stream . builderChan $ do
-    f <- readChan $ unChan sf
-    a <- readChan $ unChan sa
-
-    return $ case (f, a) of
-      (Just (Just f'), Just (Just a')) -> Just . Just $ f' a'
-      (Just Nothing, _) -> Just Nothing
-      (_, Just Nothing) -> Just Nothing
-      _ -> Nothing
+  pure a    = Stream $ builderChan (return . Just $ Just a)
+  sf <*> sa = zipStream ($) Nothing Nothing sf sa
 
 -- | '>>=' should be avoided, as it necessarily imposes sequencing,
 -- and blocks until the value being bound has been computed.
@@ -140,6 +132,12 @@ instance (MonadConc m, Monoid o) => Monoid (Find m o) where
         (Just a', Nothing) -> Just a'
         (Nothing, Just b') -> Just b'
         (Nothing, Nothing) -> Nothing
+
+-- | 'mappend' acts like a zipping function, extending with 'mempty'
+-- when one stream ends.
+instance (MonadConc m, Monoid o) => Monoid (Stream m o) where
+  mempty  = Stream $ builderChan (return $ Just Nothing)
+  mappend = zipStream mappend (Just mempty) (Just mempty)
 
 --------------------------------------------------------------------------------
 -- Execution
@@ -195,6 +193,21 @@ unsafeReadStream = liftM fromJust . readStream
 gatherStream :: (MonadConc m, Monoid o) => Stream m o -> m o
 gatherStream stream = go mempty where
   go acc = readStream stream >>= maybe (return acc) (go . mappend acc)
+
+-- | Zip two streams together, with an optional values to supply when
+-- a component stream runs out. If no value is given, the resulting
+-- stream ends as soon as that component stream does.
+zipStream :: MonadConc m => (a -> b -> c) -> Maybe a -> Maybe b -> Stream m a -> Stream m b -> Stream m c
+zipStream zip fillera fillerb (Stream sa) (Stream sb) = Stream . builderChan $ do
+    a <- readChan $ unChan sa
+    b <- readChan $ unChan sb
+
+    return $ case (a, b) of
+      (Just (Just a'), Just (Just b')) -> Just . Just $ zip a' b'
+      (Just (Just a'), Just Nothing) -> Just $ zip <$> Just a' <*> fillerb
+      (Just Nothing, Just (Just b')) -> Just $ zip <$> fillera <*> Just b'
+      (Just Nothing, Just Nothing) -> Just Nothing
+      _ -> Nothing
 
 -- | Convert a 'Stream' to a 'Find'. This will block until the entire
 -- computation terminates.
