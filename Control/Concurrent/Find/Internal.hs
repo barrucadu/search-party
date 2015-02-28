@@ -13,14 +13,15 @@ import Data.Maybe (fromJust, isNothing)
 import Unsafe.Coerce (unsafeCoerce)
 
 --------------------------------------------------------------------------------
--- Types
+-- Work Items
 
 -- | A unit of work in a monad @m@ which will produce a final result
 -- of type @a@.
 newtype WorkItem m a = WorkItem { unWrap :: forall x. WorkItem' m x a }
 
 instance Functor (WorkItem m) where
-  fmap f (WorkItem w) = workItem (_result w) (f . _mapped w) (_killme w)
+  fmap f = wrap . fmap f . unWrap where
+    wrap = WorkItem . unsafeCoerce
 
 -- | A unit of work in a monad @m@ producing a result of type @x@,
 -- which will then be transformed into a value of type @a@.
@@ -32,6 +33,9 @@ data WorkItem' m x a = WorkItem'
   , _killme :: m ()
   -- ^ Fail the computation, if it's still running.
   }
+
+instance Functor (WorkItem' m x) where
+  fmap f w = w { _mapped = f . _mapped w }
 
 -- | The possible states that a work item may be in.
 data WorkState = StillComputing | HasFailed | HasSucceeded
@@ -50,51 +54,6 @@ workItem res mapp kill = wrap $ WorkItem' res mapp kill where
 -- | Construct a 'WorkItem' containing a result.
 workItem' :: MonadConc m => Maybe a -> m (WorkItem m a)
 workItem' a = (\v -> workItem v id $ return ()) `liftM` atomically (newCTMVar a)
-
--- | A channel containing values of type @a@.
-newtype Chan m a = Chan { unChan :: forall x. Chan' m x a }
-
--- | A channel containing values of type @x@, which will be
--- transformed to type @a@ when read.
-data Chan' m x a
-  = BuilderChan'
-    { _builder :: m (Maybe x)
-    -- ^ Function to produce a new value.
-    , _bmapped :: x -> a
-    -- ^ The post-processing.
-    }
-
-  | Chan'
-    { _closed    :: CTVar m Bool
-    -- ^ Whether the channel has been closed or not.
-    , _remaining :: CTVar m Int
-    -- ^ Number of things to compute before pausing the threads.
-    , _readHead  :: CTMVar m (CStream m x)
-    -- ^ The read head of the channel.
-    , _last      :: CTVar m (Maybe x)
-    -- ^ The last thing read, allowing reads to be undone.
-    , _writeHead :: CTMVar m (CStream m x)
-    -- ^ The write head of the channel.
-    , _cmapped   :: x -> a
-    -- ^ The post-processing.
-    }
-
-instance Functor (Chan m) where
-  fmap f (Chan b@(BuilderChan' _ _)) = Chan $ b { _bmapped = f . _bmapped b }
-  fmap f (Chan c) = Chan $ c { _cmapped = f . _cmapped c }
-
-type CStream m x = CTMVar m (SItem m x)
-data SItem m x = SItem x (CStream m x)
-
--- | Construct a 'Chan'.
-chan :: Chan' m x a -> Chan m a
-chan = wrap where
-  wrap :: Chan' m x a -> Chan m a
-  wrap = Chan . unsafeCoerce
-
--- | Construct a builder 'Chan'.
-builderChan :: m (Maybe x) -> Chan m x
-builderChan mx = chan $ BuilderChan' mx id
 
 --------------------------------------------------------------------------------
 -- Processing work items
@@ -148,27 +107,83 @@ hasFailed f = do
   else isNothing `liftM` readCTMVar (_result $ unWrap f)
 
 --------------------------------------------------------------------------------
--- Processing streams
+-- Channels
+
+-- | A channel containing values of type @a@.
+newtype Chan m a = Chan { unChan :: forall x. Chan' m x a }
+
+instance Functor (Chan m) where
+  fmap f = chan . fmap f . unChan
+
+-- | A channel containing values of type @x@, which will be
+-- transformed to type @a@ when read.
+data Chan' m x a
+  = BuilderChan'
+    { _builder :: m (Maybe x)
+    -- ^ Function to produce a new value.
+    , _bmapped :: x -> a
+    -- ^ The post-processing.
+    }
+
+  | Chan'
+    { _closed    :: CTVar m Bool
+    -- ^ Whether the channel has been closed or not.
+    , _remaining :: CTVar m Int
+    -- ^ Number of things to compute before pausing the threads.
+    , _readHead  :: CTMVar m (CStream m x)
+    -- ^ The read head of the channel.
+    , _writeHead :: CTMVar m (CStream m x)
+    -- ^ The write head of the channel.
+    , _cmapped   :: x -> a
+    -- ^ The post-processing.
+    }
+
+instance Functor (Chan' m x) where
+  fmap f b@(BuilderChan' _ _) = b { _bmapped = f . _bmapped b }
+  fmap f c = c { _cmapped = f . _cmapped c }
+
+type CStream m x = CTMVar m (SItem m x)
+data SItem m x = SItem x (CStream m x)
+
+-- | Construct a 'Chan'.
+chan :: Chan' m x a -> Chan m a
+chan = wrap where
+  wrap :: Chan' m x a -> Chan m a
+  wrap = Chan . unsafeCoerce
+
+-- | Construct a builder 'Chan'.
+builderChan :: m (Maybe x) -> Chan m x
+builderChan mx = chan $ BuilderChan' mx id
+
+-- | Construct a new closed 'Chan'.
+closedChan :: MonadSTM m => m (Chan m a)
+closedChan = do
+  c <- newChan'
+  endChan' c
+  return $ chan c
+
+--------------------------------------------------------------------------------
+-- Processing channels
 
 -- | Create a new channel.
-newChan :: MonadSTM m => m (Chan' m x x)
-newChan = do
+newChan' :: MonadSTM m => m (Chan' m x x)
+newChan' = do
   hole      <- newEmptyCTMVar
   readHead  <- newCTMVar hole
-  thelast   <- newCTVar Nothing
   writeHead <- newCTMVar hole
   closed    <- newCTVar False
   remaining <- newCTVar 100
-  return $ Chan' closed remaining readHead thelast writeHead id
+  return $ Chan' closed remaining readHead writeHead id
 
--- | Get the head of a channel. @Nothing@ indicates that the
--- computation was paused and there was no result, but that it has
--- been resumed and should be tried again.
-readChan :: MonadSTM m => Chan' m x a -> m (Maybe a)
-readChan b@(BuilderChan' _ _) = do
+-- | Get the head of a channel, and an action to undo this
+-- read. @Nothing@ indicates that the computation was paused and there
+-- was no result, but that it has been resumed and should be tried
+-- again.
+readChan :: MonadSTM m => Chan m a -> m (Maybe (a, m ()))
+readChan (Chan b@(BuilderChan' _ _)) = do
   item <- _builder b
-  return $ _bmapped b `fmap` item
-readChan c = do
+  return $ (\x -> (_bmapped b x, return ())) `fmap` item
+readChan (Chan c) = do
   closed    <- readCTVar $ _closed c
   remaining <- readCTVar $ _remaining c
   -- If closed, stop here
@@ -176,47 +191,31 @@ readChan c = do
   then return Nothing
   else do
     stream <- takeCTMVar $ _readHead c
-    SItem x rest <- takeCTMVar stream
+    item@(SItem x rest) <- takeCTMVar stream
     putCTMVar (_readHead c) rest
-
-    -- Allow for ungetting
-    writeCTVar (_last c) $ Just x
 
     -- Maintain the buffer
     when (remaining < 50) $ writeCTVar (_remaining c) 100
 
-    return . Just $ _cmapped c x
-
--- | Undo the last read.
-unGetChan :: MonadSTM m => Chan' m x a -> m ()
-unGetChan (BuilderChan' _ _) = return ()
-unGetChan c = do
-  oldHead <- takeCTMVar $ _readHead c
-  thelast <- readCTVar  $ _last c
-  case thelast of
-    Just x -> do
-      writeCTVar (_last c) Nothing
-      newHead <- newCTMVar $ SItem x oldHead
-      putCTMVar (_readHead c) newHead
-    Nothing ->
-      putCTMVar (_readHead c) oldHead
+    return $ Just (_cmapped c x, newCTMVar item >>= putCTMVar (_readHead c))
 
 -- | Append to a channel. If the channel has been closed, this drops
 -- writes.
-writeChan :: MonadSTM m => Chan' m x a -> x -> m ()
-writeChan (BuilderChan' _ _) _ = return ()
-writeChan c x = do
+writeChan' :: MonadSTM m => Chan' m x a -> x -> m ()
+writeChan' (BuilderChan' _ _) _ = return ()
+writeChan' c x = do
   closed <- readCTVar $ _closed c
   unless closed $ do
     newHole <- newEmptyCTMVar
     oldHole <- takeCTMVar $ _writeHead c
     putCTMVar oldHole (SItem x newHole)
     putCTMVar (_writeHead c) newHole
+    modifyCTVar' (_remaining c) $ subtract 1
 
 -- | End a channel.
-endChan :: MonadSTM m => Chan' m x a -> m ()
-endChan (BuilderChan' _ _) = return ()
-endChan c = writeCTVar (_closed c) True
+endChan' :: MonadSTM m => Chan' m x a -> m ()
+endChan' (BuilderChan' _ _) = return ()
+endChan' c = writeCTVar (_closed c) True
 
 --------------------------------------------------------------------------------
 -- Work stealing
@@ -225,13 +224,13 @@ endChan c = writeCTVar (_closed c) True
 -- channel, if not, return a 'CTMVar' that can be blocked on to get
 -- the result, and an action to kill the computation.
 work :: MonadConc m
-     => Bool -> [m (WorkItem m a)] -> m (Either (CTMVar (STMLike m) (Maybe a), m ()) (Chan' (STMLike m) a a))
+     => Bool -> [m (WorkItem m a)] -> m (Either (CTMVar (STMLike m) (Maybe a), m ()) (Chan (STMLike m) a))
 work streaming workitems = do
   kill <- atomically newEmptyCTMVar
   caps <- getNumCapabilities
 
   res <- if streaming
-        then Right `liftM` atomically newChan
+        then Right `liftM` atomically newChan'
         else Left  `liftM` atomically newEmptyCTMVar
 
   dtid   <- fork $ driver caps res kill
@@ -239,7 +238,7 @@ work streaming workitems = do
 
   return $ case res of
     Left  var -> Left  (var, killme >> killThread dtid)
-    Right chn -> Right chn
+    Right chn -> Right $ chan chn
 
   where
     -- If there's only one capability don't bother with threads.
@@ -278,11 +277,11 @@ work streaming workitems = do
           maybea <- result fwrap
 
           case (maybea, res) of
-            (Just a, Right chn)  -> atomically (writeChan chn a >> modifyCTVar' (_remaining chn) (subtract 1)) >> process remaining res
+            (Just a, Right chn) -> atomically (writeChan' chn a) >> process remaining res
             (Just a, Left  var) -> atomically . putCTMVar var $ Just a
             _ -> process remaining res
         Nothing -> failit res
 
     -- Record that a computation failed.
     failit (Left  var) = atomically $ const () `liftM` tryPutCTMVar var Nothing
-    failit (Right chn) = atomically $ endChan chn
+    failit (Right chn) = atomically $ endChan' chn

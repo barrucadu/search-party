@@ -106,8 +106,7 @@ instance MonadConc m => Monad (Find m) where
 -- | '<|>' is a nondeterministic choice if both computations succeed,
 -- otherwise it returns the nonfailing one. If both fail, this fails.
 instance MonadConc m => Alternative (Find m) where
-  empty = fail ""
-
+  empty   = fail ""
   a <|> b = oneOf [a, b]
 
 -- | 'mplus' is the same as '<|>', and follows the left distribution
@@ -136,7 +135,7 @@ instance (MonadConc m, Monoid o) => Monoid (Find m o) where
 -- | 'mappend' acts like a zipping function, truncating when one
 -- stream ends.
 instance (MonadConc m, Monoid o) => Monoid (Stream m o) where
-  mempty = pure mempty
+  mempty        = pure mempty
   mappend sa sb = mappend <$> sa <*> sb
 
 --------------------------------------------------------------------------------
@@ -165,7 +164,7 @@ hasResult f = unsafePerformIO $ isJust `liftM` runFind f
 -- | Read the head of stream, if the stream is finished 'Nothing' will
 -- be returned.
 readStream :: MonadConc m => Stream m a -> m (Maybe a)
-readStream stream = atomically . readChan . unChan $ unStream stream
+readStream stream = liftM (fmap fst) . atomically . readChan $ unStream stream
 
 -- | Take some values from the start of a stream, if the stream does
 -- not contain that many elements, a shorter result list is returned.
@@ -193,25 +192,25 @@ gatherStream stream = go mempty where
 -- stream ends as soon as that component stream does.
 zipStream :: MonadConc m => (a -> b -> c) -> Maybe a -> Maybe b -> Stream m a -> Stream m b -> Stream m c
 zipStream f fillera fillerb (Stream sa) (Stream sb) = Stream . builderChan $ do
-    a <- readChan $ unChan sa
-    b <- readChan $ unChan sb
+    a <- readChan sa
+    b <- readChan sb
 
     let zipped x y  = return . Just $ f x y
     let endOfStream = return Nothing
 
     case (a, b) of
       -- If both streams have a value, apply the function
-      (Just a', Just b') -> zipped a' b'
+      (Just (a', _), Just (b', _)) -> zipped a' b'
 
       -- If one stream has a value and the other is empty, fill in the
       -- blank. If there is no filler, push the value just received
       -- back to the stream and indicate the end.
-      (Just a', Nothing) -> case fillerb of
+      (Just (a', undo), Nothing) -> case fillerb of
         Just b' -> zipped a' b'
-        Nothing -> unGetChan (unChan sa) >> endOfStream
-      (Nothing, Just b') -> case fillera of
+        Nothing -> undo >> endOfStream
+      (Nothing, Just (b', undo)) -> case fillera of
         Just a' -> zipped a' b'
-        Nothing -> unGetChan (unChan sb) >> endOfStream
+        Nothing -> undo >> endOfStream
 
       -- If both streams are empty, empty.
       (Nothing, Nothing) -> endOfStream
@@ -243,16 +242,12 @@ oneOf as = Find $ do
 
 -- | Return all non-failing results, the order is nondeterministic.
 allOf :: MonadConc m => [Find m a] -> m (Stream m a)
-allOf [] = do
-  c <- atomically newChan
-  atomically $ endChan c
-  return . Stream $ chan c
-
+allOf [] = Stream `liftM` atomically closedChan
 allOf as = do
   -- Streaming computations don't really short-circuit, they just
   -- block when there are enough items in the stream.
   Right c <- work True $ map unFind as
-  return . Stream $ chan c
+  return $ Stream c
 
 --------------------------------------------------------------------------------
 -- Combinators
