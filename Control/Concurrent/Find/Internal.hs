@@ -9,7 +9,7 @@ import Control.Concurrent.STM.CTMVar
 import Control.Monad (liftM, unless, when)
 import Control.Monad.Conc.Class
 import Control.Monad.STM.Class
-import Data.Maybe (fromJust, isNothing)
+import Data.Maybe (fromJust, isJust, isNothing)
 import Unsafe.Coerce (unsafeCoerce)
 
 --------------------------------------------------------------------------------
@@ -220,22 +220,25 @@ endChan' c = writeCTVar (_closed c) True
 --------------------------------------------------------------------------------
 -- Work stealing
 
--- | Push a batch of work to the queue. If streaming, return a
--- channel, if not, return a 'CTMVar' that can be blocked on to get
--- the result, and an action to kill the computation.
+-- | Push a batch of work to the queue.
+-- 
+-- If streaming, return a channel, if not, return a 'CTMVar' that can
+-- be blocked on to get the result, and an action to kill the
+-- computation.
+--
+-- If in order, return results in the order in which they appear in
+-- the work item list.
+
 work :: MonadConc m
-     => Bool -> [m (WorkItem m a)] -> m (Either (CTMVar (STMLike m) (Maybe a), m ()) (Chan (STMLike m) a))
-work streaming workitems = do
+     => Bool -> Bool -> [m (WorkItem m a)] -> m (Either (CTMVar (STMLike m) (Maybe a), m ()) (Chan (STMLike m) a))
+work streaming inorder workitems = do
   kill <- atomically newEmptyCTMVar
   caps <- getNumCapabilities
-
   res <- if streaming
         then Right `liftM` atomically newChan'
         else Left  `liftM` atomically newEmptyCTMVar
-
   dtid   <- fork $ driver caps res kill
   killme <- atomically $ readCTMVar kill
-
   return $ case res of
     Left  var -> Left  (var, killme >> killThread dtid)
     Right chn -> Right $ chan chn
@@ -243,15 +246,17 @@ work streaming workitems = do
   where
     -- If there's only one capability don't bother with threads.
     driver 1 res kill = do
-      remaining <- newCRef workitems
+      remaining <- newCRef $ zip workitems ([0..] :: [Int])
+      currently <- atomically $ newCTVar []
       atomically . putCTMVar kill $ failit res
-      process remaining res
+      process remaining currently res
 
     -- Fork off as many threads as there are capabilities, and queue
     -- up the remaining work.
     driver caps res kill = do
-      remaining <- newCRef workitems
-      tids <- mapM (\cap -> forkOn cap $ process remaining res) [1..caps]
+      remaining <- newCRef $ zip workitems ([0..] :: [Int])
+      currently <- atomically $ newCTVar []
+      tids <- mapM (\cap -> forkOn cap $ process remaining currently res) [1..caps]
 
       -- Construct an action to short-circuit the computation.
       atomically . putCTMVar kill $ failit res >> mapM_ killThread tids
@@ -264,22 +269,38 @@ work streaming workitems = do
 
     -- Process a work item and store the result if it is a success,
     -- otherwise continue.
-    process remaining res = do
+    process remaining currently res = do
       mitem <- modifyCRef remaining $ \rs -> if null rs then ([], Nothing) else (tail rs, Just $ head rs)
+
       case mitem of
-        Just item -> do
+        Just (item, idx) -> do
           -- If streaming, and the buffer is full, block.
           atomically $ case res of
             Right chn -> readCTVar (_remaining chn) >>= check . (/= 0)
             _ -> return ()
 
+          -- If in order, add the index of this work item to the
+          -- "currently processing" list.
+          when inorder . atomically $ do
+            current <- readCTVar currently
+            writeCTVar currently $ idx:current
+
+          -- Compute the result
           fwrap  <- item
           maybea <- result fwrap
 
+          -- If in order, and the result was successful, block until
+          -- there are no threads still processing an earlier work
+          -- item.
+          when (inorder && isJust maybea) . atomically $ do
+            current <- readCTVar currently
+            check $ all (>=idx) current
+            modifyCTVar' currently $ filter (/=idx)
+
           case (maybea, res) of
-            (Just a, Right chn) -> atomically (writeChan' chn a) >> process remaining res
+            (Just a, Right chn) -> atomically (writeChan' chn a) >> process remaining currently res
             (Just a, Left  var) -> atomically . putCTMVar var $ Just a
-            _ -> process remaining res
+            _ -> process remaining currently res
         Nothing -> failit res
 
     -- Record that a computation failed.
