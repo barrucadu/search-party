@@ -289,22 +289,22 @@ work streaming inorder workitems = do
           fwrap  <- item
           maybea <- result fwrap
 
+          -- Indicate that the work item has been stored in the result
+          -- variable, and so workers with later syccessful work items
+          -- can continue.
+          let finish = modifyCTVar' currently $ filter (/=idx)
+
           case maybea of
             Just a -> do
               -- If in order, block until there are no workers
               -- processing an earlier work item.
               when inorder . atomically $ readCTVar currently >>= check . all (>=idx)
 
-              -- Indicate that the work item has been stored in the
-              -- result variable, and so workers with later syccessful
-              -- work items can continue.
-              let finish = modifyCTVar' currently $ filter (/=idx)
-
               -- Store the result
               case res of
                 Right chn -> atomically (writeChan' chn a >> finish) >> process remaining currently res
                 Left  var -> atomically $ putCTMVar var (Just a) >> finish
-            _ -> process remaining currently res
+            _ -> atomically finish >> process remaining currently res
         Nothing -> failit res
 
     -- Record that a computation failed.
