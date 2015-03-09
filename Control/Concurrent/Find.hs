@@ -167,6 +167,7 @@ unsafeRunFind (Find mf) = mf >>= unsafeResult
 --
 -- This uses 'unsafePerformIO' internally.
 toMaybe :: Find IO a -> Maybe a
+{-# NOINLINE toMaybe #-}
 toMaybe = unsafePerformIO . runFind
 
 -- | Check if a computation has a result. This will block until a
