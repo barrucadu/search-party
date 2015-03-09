@@ -9,7 +9,7 @@ import Control.Concurrent.STM.CTMVar
 import Control.Monad (liftM, unless, when)
 import Control.Monad.Conc.Class
 import Control.Monad.STM.Class
-import Data.Maybe (fromJust, isJust, isNothing)
+import Data.Maybe (fromJust, isNothing)
 import Unsafe.Coerce (unsafeCoerce)
 
 --------------------------------------------------------------------------------
@@ -289,17 +289,21 @@ work streaming inorder workitems = do
           fwrap  <- item
           maybea <- result fwrap
 
-          -- If in order, and the result was successful, block until
-          -- there are no threads still processing an earlier work
-          -- item.
-          when (inorder && isJust maybea) . atomically $ do
-            current <- readCTVar currently
-            check $ all (>=idx) current
-            modifyCTVar' currently $ filter (/=idx)
+          case maybea of
+            Just a -> do
+              -- If in order, block until there are no workers
+              -- processing an earlier work item.
+              when inorder . atomically $ readCTVar currently >>= check . all (>=idx)
 
-          case (maybea, res) of
-            (Just a, Right chn) -> atomically (writeChan' chn a) >> process remaining currently res
-            (Just a, Left  var) -> atomically . putCTMVar var $ Just a
+              -- Indicate that the work item has been stored in the
+              -- result variable, and so workers with later syccessful
+              -- work items can continue.
+              let finish = modifyCTVar' currently $ filter (/=idx)
+
+              -- Store the result
+              case res of
+                Right chn -> atomically (writeChan' chn a >> finish) >> process remaining currently res
+                Left  var -> atomically $ putCTMVar var (Just a) >> finish
             _ -> process remaining currently res
         Nothing -> failit res
 
