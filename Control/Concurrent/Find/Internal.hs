@@ -2,7 +2,26 @@
 {-# LANGUAGE Rank2Types         #-}
 
 -- | The guts of the Find monad.
-module Control.Concurrent.Find.Internal where
+module Control.Concurrent.Find.Internal
+  (  -- * Work Items
+    WorkItem
+  , workItem
+  , workItem'
+
+  -- * Channels
+  , Chan
+  , builderChan
+  , readChan
+  , closedChan
+
+  -- * Processing work items
+  , result
+  , unsafeResult
+  , blockOn
+
+  -- * Work stealing
+  , work
+  ) where
 
 import Control.Concurrent.STM.CTVar (modifyCTVar')
 import Control.Concurrent.STM.CTMVar
@@ -254,7 +273,7 @@ work streaming inorder workitems = do
       currently <- atomically $ newCTVar []
       liveworkers <- atomically $ newCTVar (1::Int)
       atomically . putCTMVar kill $ failit res
-      process remaining currently liveworkers res
+      explorer inorder remaining currently liveworkers res
       failit res
 
     -- Fork off as many threads as there are capabilities, and queue
@@ -263,7 +282,7 @@ work streaming inorder workitems = do
       remaining <- atomically . newCTVar $ zip workitems ([0..] :: [Int])
       currently <- atomically $ newCTVar []
       liveworkers <- atomically $ newCTVar caps
-      tids <- mapM (\cap -> forkOn cap $ process remaining currently liveworkers res) [1..caps]
+      tids <- mapM (\cap -> forkOn cap $ explorer inorder remaining currently liveworkers res) [1..caps]
 
       -- Construct an action to short-circuit the computation.
       atomically . putCTMVar kill $ failit res >> mapM_ killThread tids
@@ -280,47 +299,57 @@ work streaming inorder workitems = do
       failit res
       mapM_ killThread tids
 
-    -- Process a work item and store the result if it is a success,
-    -- otherwise continue.
-    process remaining currently liveworkers res = do
-      mitem <- atomically $ do
-        work <- readCTVar remaining
-        case work of
-          (w@(_, idx):ws) -> do
-            writeCTVar remaining ws
-            when inorder $ modifyCTVar' currently (idx:)
-            return $ Just w
-          [] -> return Nothing
-
-      case mitem of
-        Just (item, idx) -> do
-          -- If streaming, and the buffer is full, block.
-          atomically $ case res of
-            Right chn -> readCTVar (_remaining chn) >>= check . (/= 0)
-            _ -> return ()
-
-          -- Compute the result
-          fwrap  <- item
-          maybea <- result fwrap
-
-          -- Indicate that the work item has been stored in the result
-          -- variable, and so workers with later syccessful work items
-          -- can continue.
-          let finish = when inorder . modifyCTVar' currently $ filter (/=idx)
-
-          case maybea of
-            Just a -> do
-              -- If in order, block until there are no workers
-              -- processing an earlier work item.
-              when inorder . atomically $ readCTVar currently >>= check . all (>=idx)
-
-              -- Store the result
-              case res of
-                Right chn -> atomically (writeChan' chn a >> finish) >> process remaining currently liveworkers res
-                Left  var -> atomically $ putCTMVar var (Just a) >> finish
-            _ -> atomically finish >> process remaining currently liveworkers res
-        Nothing -> atomically . modifyCTVar' liveworkers $ subtract 1
-
     -- Record that a computation failed.
     failit (Left  var) = atomically $ const () `liftM` tryPutCTMVar var Nothing
     failit (Right chn) = atomically $ endChan' chn
+
+-- | A member of the search party, works through a queue of
+-- 'WorkItem's, storing successful results and terminating when there
+-- is nothing left to do.
+explorer :: MonadConc m
+         => Bool
+         -> CTVar (STMLike m) [(m (WorkItem m a), Int)]
+         -> CTVar (STMLike m) [Int]
+         -> CTVar (STMLike m) Int
+         -> Either (CTMVar (STMLike m) (Maybe a)) (Chan' (STMLike m) a a)
+         -> m ()
+explorer inorder remaining currently liveworkers res = loop where
+  loop = do
+    mitem <- atomically $ do
+      witem <- readCTVar remaining
+      case witem of
+        (w@(_, idx):ws) -> do
+          writeCTVar remaining ws
+          when inorder $ modifyCTVar' currently (idx:)
+          return $ Just w
+        [] -> return Nothing
+
+    case mitem of
+      Just (item, idx) -> do
+        -- If streaming, and the buffer is full, block.
+        atomically $ case res of
+          Right chn -> readCTVar (_remaining chn) >>= check . (/= 0)
+          _ -> return ()
+
+        -- Compute the result
+        fwrap  <- item
+        maybea <- result fwrap
+
+        case maybea of
+          Just a -> do
+            -- If in order, block until there are no workers
+            -- processing an earlier work item.
+            when inorder . atomically $ readCTVar currently >>= check . all (>=idx)
+
+            -- Store the result
+            case res of
+              Right chn -> atomically (writeChan' chn a >> tallyHo idx) >> loop
+              Left  var -> atomically $ putCTMVar var (Just a) >> tallyHo idx >> retire
+          _ -> atomically (tallyHo idx) >> loop
+      Nothing -> atomically retire
+
+  -- Record that the current work item is done.
+  tallyHo idx = when inorder . modifyCTVar' currently $ filter (/=idx)
+
+  -- Record that the explorer is done.
+  retire = modifyCTVar' liveworkers $ subtract 1
