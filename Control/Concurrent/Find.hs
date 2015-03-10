@@ -20,6 +20,7 @@ module Control.Concurrent.Find
   , firstOf, orderedOf
   -- * Combinators
   , (!), (?), (@!), (@?)
+  , find, findAll, mapped, mappedAll
   , both
   , Control.Concurrent.Find.either
   , merging
@@ -27,6 +28,7 @@ module Control.Concurrent.Find
   -- | These are all safe to extract the result from with
   -- 'toMaybe' and 'toList'.
   , (.!), (.?), (>!), (>?)
+  , first, inOrder, mappedFirst, mappedInOrder
   ) where
 
 import Control.Applicative (Applicative(..), Alternative(..), (<$>))
@@ -293,39 +295,71 @@ orderedOf as = do
 --------------------------------------------------------------------------------
 -- Combinators
 
--- | Return an element in the list matching the predicate.
+-- | Flipped infix version of 'find'.
 (!) :: MonadConc m => [a] -> (a -> Bool) -> Find m a
 as ! p = oneOf [if p a then success a else failure | a <- as]
 
--- | Variant of '!' which returns the first such element.
+-- | Return an element in the list matching the predicate.
+find :: MonadConc m => (a -> Bool) -> [a] -> Find m a
+find = flip (!)
+
+-- | Flipped infix version of 'first'.
 (.!) :: MonadConc m => [a] -> (a -> Bool) -> Find m a
 as .! p = firstOf [if p a then success a else failure | a <- as]
 
--- | Return an element in the list giving a 'Just'.
+-- | Variant of 'find' which returns the first such element.
+first :: MonadConc m => (a -> Bool) -> [a] -> Find m a
+first = flip (.!)
+
+-- | Flipped infix version of 'mapped'.
 (?) :: MonadConc m => [a] -> (a -> Maybe b) -> Find m b
 as ? f = oneOf $ map (maybe failure success . f) as
 
--- | Variant of '?' which returns the first such element.
+-- | Return an element in the list giving a 'Just'.
+mapped :: MonadConc m => (a -> Maybe b) -> [a] -> Find m b
+mapped = flip (?)
+
+-- | Flipped infix version of 'mappedFirst'.
 (.?) :: MonadConc m => [a] -> (a -> Maybe b) -> Find m b
 as .? f = firstOf $ map (maybe failure success . f) as
 
--- | Variant of '!' which returns all such elements.
+-- | Variant of 'mapped' which returns the first such element.
+mappedFirst :: MonadConc m => (a -> Maybe b) -> [a] -> Find m b
+mappedFirst = flip (.?)
+
+-- | Flipped infix version of 'findAll'.
 (@!) :: MonadConc m => [a] -> (a -> Bool) -> m (Stream m a)
 as @! p = allOf [if p a then success a else failure | a <- as]
 
--- | Variant of '@!' which returns the elements in the same order that
--- they appear in the original list.
+-- | Variant of 'find' which returns all such elements.
+findAll :: MonadConc m => (a -> Bool) -> [a] -> m (Stream m a)
+findAll = flip (@!)
+
+-- | Flipped infix version of 'inOrder'.
 (>!) :: MonadConc m => [a] -> (a -> Bool) -> m (Stream m a)
 as >! p = orderedOf [if p a then success a else failure | a <- as]
 
--- | Variant of '?' which returns all such elements.
+-- | Variant of 'findAll' which returns the elements in the same order
+-- that they appear in the original list.
+inOrder :: MonadConc m => (a -> Bool) -> [a] -> m (Stream m a)
+inOrder = flip (>!)
+
+-- | Flipped infix version of 'mappedAll'.
 (@?) :: MonadConc m => [a] -> (a -> Maybe b) -> m (Stream m b)
 as @? f = allOf $ map (maybe failure success . f) as
 
--- | Variant of '@?' which returns the elements in the same order that
--- they appear in the original list.
+-- | Variant of 'mapped' which returns all such elements.
+mappedAll :: MonadConc m => (a -> Maybe b) -> [a] -> m (Stream m b)
+mappedAll = flip (@?)
+
+-- | Flipped infix version of 'mappedInOrder'.
 (>?) :: MonadConc m => [a] -> (a -> Maybe b) -> m (Stream m b)
 as >? f = orderedOf $ map (maybe failure success . f) as
+
+-- | Variant of 'mappedAll' which returns the elements in the same
+-- order that they appear in the original list.
+mappedInOrder :: MonadConc m => (a -> Maybe b) -> [a] -> m (Stream m b)
+mappedInOrder = flip (>?)
 
 -- | Find elements from a pair of lists satisfying predicates. Both
 -- lists are searched in parallel.
