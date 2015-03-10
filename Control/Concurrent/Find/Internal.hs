@@ -9,7 +9,7 @@ import Control.Concurrent.STM.CTMVar
 import Control.Monad (liftM, unless, when)
 import Control.Monad.Conc.Class
 import Control.Monad.STM.Class
-import Data.Maybe (fromJust, isNothing)
+import Data.Maybe (fromJust, isJust, isNothing)
 import Unsafe.Coerce (unsafeCoerce)
 
 --------------------------------------------------------------------------------
@@ -186,18 +186,22 @@ readChan (Chan b@(BuilderChan' _ _)) = do
 readChan (Chan c) = do
   closed    <- readCTVar $ _closed c
   remaining <- readCTVar $ _remaining c
-  -- If closed, stop here
-  if closed
-  then return Nothing
-  else do
-    stream <- takeCTMVar $ _readHead c
-    item@(SItem x rest) <- takeCTMVar stream
-    putCTMVar (_readHead c) rest
 
-    -- Maintain the buffer
-    when (remaining < 50) $ writeCTVar (_remaining c) 100
+  -- Try to take an item from the stream.
+  stream <- takeCTMVar $ _readHead c
+  mitem  <- tryTakeCTMVar stream
+  case mitem of
+    Just (item@(SItem x rest)) -> do
+      putCTMVar (_readHead c) rest
 
-    return $ Just (_cmapped c x, newCTMVar item >>= putCTMVar (_readHead c))
+      -- Maintain the buffer
+      when (remaining < 50) $ writeCTVar (_remaining c) 100
+
+      return $ Just (_cmapped c x, newCTMVar item >>= putCTMVar (_readHead c))
+
+    -- If there's nothing there, retry if the stream hasn't been
+    -- closed.
+    Nothing -> check closed >> putCTMVar (_readHead c) stream >> return Nothing
 
 -- | Append to a channel. If the channel has been closed, this drops
 -- writes.
@@ -248,28 +252,37 @@ work streaming inorder workitems = do
     driver 1 res kill = do
       remaining <- newCRef $ zip workitems ([0..] :: [Int])
       currently <- atomically $ newCTVar []
+      liveworkers <- atomically $ newCTVar (1::Int)
       atomically . putCTMVar kill $ failit res
-      process remaining currently res
+      process remaining currently liveworkers res
+      failit res
 
     -- Fork off as many threads as there are capabilities, and queue
     -- up the remaining work.
     driver caps res kill = do
       remaining <- newCRef $ zip workitems ([0..] :: [Int])
       currently <- atomically $ newCTVar []
-      tids <- mapM (\cap -> forkOn cap $ process remaining currently res) [1..caps]
+      liveworkers <- atomically $ newCTVar caps
+      tids <- mapM (\cap -> forkOn cap $ process remaining currently liveworkers res) [1..caps]
 
       -- Construct an action to short-circuit the computation.
       atomically . putCTMVar kill $ failit res >> mapM_ killThread tids
 
-      -- If not streaming, block until there is a result then kill any
-      -- still-running threads.
-      case res of
-        Left ctmvar -> atomically (readCTMVar ctmvar) >> mapM_ killThread tids
-        _ -> return ()
+      -- Block until there is a result, or every thread terminates,
+      -- and then clean up.
+      atomically $ do
+        gotres <- case res of
+                   Left ctmvar -> tryReadCTMVar ctmvar
+                   _ -> return Nothing
+        live <- readCTVar liveworkers
+        check $ live == 0 || fmap isJust gotres == Just True
+
+      failit res
+      mapM_ killThread tids
 
     -- Process a work item and store the result if it is a success,
     -- otherwise continue.
-    process remaining currently res = do
+    process remaining currently liveworkers res = do
       mitem <- modifyCRef remaining $ \rs -> if null rs then ([], Nothing) else (tail rs, Just $ head rs)
 
       case mitem of
@@ -281,9 +294,7 @@ work streaming inorder workitems = do
 
           -- If in order, add the index of this work item to the
           -- "currently processing" list.
-          when inorder . atomically $ do
-            current <- readCTVar currently
-            writeCTVar currently $ idx:current
+          when inorder . atomically $ modifyCTVar' currently (idx:)
 
           -- Compute the result
           fwrap  <- item
@@ -302,10 +313,10 @@ work streaming inorder workitems = do
 
               -- Store the result
               case res of
-                Right chn -> atomically (writeChan' chn a >> finish) >> process remaining currently res
+                Right chn -> atomically (writeChan' chn a >> finish) >> process remaining currently liveworkers res
                 Left  var -> atomically $ putCTMVar var (Just a) >> finish
-            _ -> atomically finish >> process remaining currently res
-        Nothing -> failit res
+            _ -> atomically finish >> process remaining currently liveworkers res
+        Nothing -> atomically . modifyCTVar' liveworkers $ subtract 1
 
     -- Record that a computation failed.
     failit (Left  var) = atomically $ const () `liftM` tryPutCTMVar var Nothing
