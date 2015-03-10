@@ -17,7 +17,10 @@ main :: IO ()
 main = do
   pass <- andM [ trees
               , countdown [16,8,3] 21
-              , hash 10 ["Bool", "Maybe", "Either", "Ordering", "Char", "String"]]
+              --, hash 10 ["Bool", "Maybe", "Either", "Ordering", "Char", "String"]
+              , streams1
+              , streams2
+              ]
   if pass then exitSuccess else exitFailure
 
 --------------------------------------------------------------------------------
@@ -73,6 +76,20 @@ hash maxgap keywords = dejafus (runFind $ [(i,j,f,g,h) | i <- [0..maximum (map l
     f'    = fromIntegral f / 16
     g'    = fromIntegral g / 16
     h'    = fromIntegral h / 16
+
+--------------------------------------------------------------------------------
+-- (streams1): Checking streams contain a result.
+
+streams1 :: IO Bool
+streams1 = dejafus (as @! const True >>= readStream) $ cases "streams1" (`elem` as) where
+  as = [0,1]
+
+--------------------------------------------------------------------------------
+-- (streams2): Checking stream ordering works
+
+streams2 :: IO Bool
+streams2 = dejafus (as >! const True >>= fmap Just . takeStream 10) $ cases "streams2" (==as) where
+  as = [0,1]
 
 --------------------------------------------------------------------------------
 -- Utility functions
