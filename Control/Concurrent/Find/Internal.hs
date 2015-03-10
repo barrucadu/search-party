@@ -250,7 +250,7 @@ work streaming inorder workitems = do
   where
     -- If there's only one capability don't bother with threads.
     driver 1 res kill = do
-      remaining <- newCRef $ zip workitems ([0..] :: [Int])
+      remaining <- atomically . newCTVar $ zip workitems ([0..] :: [Int])
       currently <- atomically $ newCTVar []
       liveworkers <- atomically $ newCTVar (1::Int)
       atomically . putCTMVar kill $ failit res
@@ -260,7 +260,7 @@ work streaming inorder workitems = do
     -- Fork off as many threads as there are capabilities, and queue
     -- up the remaining work.
     driver caps res kill = do
-      remaining <- newCRef $ zip workitems ([0..] :: [Int])
+      remaining <- atomically . newCTVar $ zip workitems ([0..] :: [Int])
       currently <- atomically $ newCTVar []
       liveworkers <- atomically $ newCTVar caps
       tids <- mapM (\cap -> forkOn cap $ process remaining currently liveworkers res) [1..caps]
@@ -283,7 +283,14 @@ work streaming inorder workitems = do
     -- Process a work item and store the result if it is a success,
     -- otherwise continue.
     process remaining currently liveworkers res = do
-      mitem <- modifyCRef remaining $ \rs -> if null rs then ([], Nothing) else (tail rs, Just $ head rs)
+      mitem <- atomically $ do
+        work <- readCTVar remaining
+        case work of
+          (w@(_, idx):ws) -> do
+            writeCTVar remaining ws
+            when inorder $ modifyCTVar' currently (idx:)
+            return $ Just w
+          [] -> return Nothing
 
       case mitem of
         Just (item, idx) -> do
@@ -292,10 +299,6 @@ work streaming inorder workitems = do
             Right chn -> readCTVar (_remaining chn) >>= check . (/= 0)
             _ -> return ()
 
-          -- If in order, add the index of this work item to the
-          -- "currently processing" list.
-          when inorder . atomically $ modifyCTVar' currently (idx:)
-
           -- Compute the result
           fwrap  <- item
           maybea <- result fwrap
@@ -303,7 +306,7 @@ work streaming inorder workitems = do
           -- Indicate that the work item has been stored in the result
           -- variable, and so workers with later syccessful work items
           -- can continue.
-          let finish = modifyCTVar' currently $ filter (/=idx)
+          let finish = when inorder . modifyCTVar' currently $ filter (/=idx)
 
           case maybea of
             Just a -> do
