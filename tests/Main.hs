@@ -16,7 +16,7 @@ import qualified CountDown as C
 main :: IO ()
 main = do
   pass <- andM [ trees
-              , countdown [16,8,3] 21
+              , countdown [16,8] 8
               --, hash 10 ["Bool", "Maybe", "Either", "Ordering", "Char", "String"]
               , streams1
               , streams2
