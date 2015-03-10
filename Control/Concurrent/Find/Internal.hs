@@ -275,7 +275,7 @@ work streaming inorder workitems = do
                    Left ctmvar -> tryReadCTMVar ctmvar
                    _ -> return Nothing
         live <- readCTVar liveworkers
-        check $ live == 0 || fmap isJust gotres == Just True
+        check $ live == 0 || isJust gotres
 
       failit res
       mapM_ killThread tids
