@@ -210,6 +210,17 @@ gatherStream stream = go mempty where
 -- | Zip two streams together, with an optional values to supply when
 -- a component stream runs out. If no value is given, the resulting
 -- stream ends as soon as that component stream does.
+--
+-- As streams are not duplicated when zipped, the original streams
+-- should not be used again: this goes for functions which call
+-- 'zipStream', like 'mappend' and '<*>' too, otherwise this sort of
+-- thing can happen (abusing list syntax for streams):
+--
+-- > let s1 = [Sum 1, Sum 2, Sum 3]
+-- > let s2 = s1 <> mempty
+-- > let s3 = s1 <> mempty
+-- > readStream s2 == Sum 1
+-- > readStream s3 == Sum 2
 zipStream :: MonadConc m => (a -> b -> c) -> Maybe a -> Maybe b -> Stream m a -> Stream m b -> Stream m c
 zipStream f fillera fillerb (Stream sa) (Stream sb) = Stream . builderChan $ do
     a <- readChan sa
