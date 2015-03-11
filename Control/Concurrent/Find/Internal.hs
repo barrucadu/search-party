@@ -147,12 +147,10 @@ data Chan' m x a
   | Chan'
     { _closed    :: CTVar m Bool
     -- ^ Whether the channel has been closed or not.
-    , _remaining :: CTVar m Int
-    -- ^ Number of things to compute before pausing the threads.
-    , _readHead  :: CTMVar m (CStream m x)
-    -- ^ The read head of the channel.
-    , _writeHead :: CTMVar m (CStream m x)
-    -- ^ The write head of the channel.
+    , _var       :: CTMVar m x
+    -- ^ Output variable.
+    , _unget     :: CTVar m (Maybe x)
+    -- ^ Allows undoing a single read.
     , _cmapped   :: x -> a
     -- ^ The post-processing.
     }
@@ -160,9 +158,6 @@ data Chan' m x a
 instance Functor (Chan' m x) where
   fmap f b@(BuilderChan' _ _) = b { _bmapped = f . _bmapped b }
   fmap f c = c { _cmapped = f . _cmapped c }
-
-type CStream m x = CTMVar m (SItem m x)
-data SItem m x = SItem x (CStream m x)
 
 -- | Construct a 'Chan'.
 chan :: Chan' m x a -> Chan m a
@@ -177,7 +172,8 @@ builderChan mx = chan $ BuilderChan' mx id
 -- | Construct a new closed 'Chan'.
 closedChan :: MonadSTM m => m (Chan m a)
 closedChan = do
-  c <- newChan'
+  empty <- newEmptyCTMVar
+  c <- newChan' empty
   endChan' c
   return $ chan c
 
@@ -185,55 +181,40 @@ closedChan = do
 -- Processing channels
 
 -- | Create a new channel.
-newChan' :: MonadSTM m => m (Chan' m x x)
-newChan' = do
-  hole      <- newEmptyCTMVar
-  readHead  <- newCTMVar hole
-  writeHead <- newCTMVar hole
-  closed    <- newCTVar False
-  remaining <- newCTVar 100
-  return $ Chan' closed remaining readHead writeHead id
+newChan' :: MonadSTM m => CTMVar m x -> m (Chan' m x x)
+newChan' var = do
+  closed <- newCTVar False
+  unget  <- newCTVar Nothing
+  return $ Chan' closed var unget id
 
--- | Get the head of a channel, and an action to undo this
--- read. @Nothing@ indicates that the computation was paused and there
--- was no result, but that it has been resumed and should be tried
--- again.
+-- | Get the head of a channel, and an action to undo this read
+-- ('BuilderChan's cannot have reads undone). @Nothing@ indicates that
+-- the computation was paused and there was no result, but that it has
+-- been resumed and should be tried again.
 readChan :: MonadSTM m => Chan m a -> m (Maybe (a, m ()))
 readChan (Chan b@(BuilderChan' _ _)) = do
   item <- _builder b
   return $ (\x -> (_bmapped b x, return ())) `fmap` item
 readChan (Chan c) = do
-  closed    <- readCTVar $ _closed c
-  remaining <- readCTVar $ _remaining c
+  ung <- readCTVar $ _unget c
 
-  -- Try to take an item from the stream.
-  stream <- takeCTMVar $ _readHead c
-  mitem  <- tryTakeCTMVar stream
-  case mitem of
-    Just (item@(SItem x rest)) -> do
-      putCTMVar (_readHead c) rest
+  case ung of
+    -- First check if the last read was undone
+    Just x  -> do
+      writeCTVar (_unget c) Nothing
+      return $ Just (_cmapped c x, writeCTVar (_unget c) ung)
 
-      -- Maintain the buffer
-      when (remaining < 50) $ writeCTVar (_remaining c) 100
+    -- Then try to read from the CTMVars in turn
+    Nothing -> do
+      closed <- readCTVar     $ _closed c
+      res    <- tryTakeCTMVar $ _var c
 
-      return $ Just (_cmapped c x, newCTMVar item >>= putCTMVar (_readHead c))
+      case res of
+        -- Return the value read
+        Just x -> return $ Just (_cmapped c x, writeCTVar (_unget c) res)
 
-    -- If there's nothing there, retry if the stream hasn't been
-    -- closed.
-    Nothing -> check closed >> putCTMVar (_readHead c) stream >> return Nothing
-
--- | Append to a channel. If the channel has been closed, this drops
--- writes.
-writeChan' :: MonadSTM m => Chan' m x a -> x -> m ()
-writeChan' (BuilderChan' _ _) _ = return ()
-writeChan' c x = do
-  closed <- readCTVar $ _closed c
-  unless closed $ do
-    newHole <- newEmptyCTMVar
-    oldHole <- takeCTMVar $ _writeHead c
-    putCTMVar oldHole (SItem x newHole)
-    putCTMVar (_writeHead c) newHole
-    modifyCTVar' (_remaining c) $ subtract 1
+        -- If not closed, block.
+        Nothing -> check closed >> return Nothing
 
 -- | End a channel.
 endChan' :: MonadSTM m => Chan' m x a -> m ()
@@ -255,37 +236,48 @@ endChan' c = writeCTVar (_closed c) True
 work :: MonadConc m
      => Bool -> Bool -> [m (WorkItem m a)] -> m (Either (CTMVar (STMLike m) (Maybe a), m ()) (Chan (STMLike m) a))
 work streaming inorder workitems = do
-  kill <- atomically newEmptyCTMVar
   caps <- getNumCapabilities
-  res <- if streaming
-        then Right `liftM` atomically newChan'
-        else Left  `liftM` atomically newEmptyCTMVar
-  dtid   <- fork $ driver caps res kill
-  killme <- atomically $ readCTMVar kill
+
+  -- Create the workers and the output variable(s)
+  liveworkers <- atomically $ newCTVar caps
+  (explorers, res) <- atomically $ do
+    remaining   <- newCTVar $ zip workitems [0..]
+    currently   <- newCTVar []
+
+    if streaming
+    then do
+      var <- newEmptyCTMVar
+      chn <- newChan' var
+      let explorers = map (\_ -> explorer True inorder remaining id currently liveworkers var) [1..caps]
+      return (explorers, Right chn)
+
+    else do
+      var <- newEmptyCTMVar
+      let explorers = map (\_ -> explorer False inorder remaining Just currently liveworkers var) [1..caps]
+      return (explorers, Left var)
+
+  ctids <- atomically newEmptyCTMVar
+  dtid  <- fork $ driver explorers res liveworkers ctids
+  ctids <- atomically $ readCTMVar ctids
+
   return $ case res of
-    Left  var -> Left  (var, killme >> killThread dtid)
+    Left  var -> Left  (var, mapM_ killThread ctids >> failit res >> killThread dtid)
     Right chn -> Right $ chan chn
 
   where
     -- If there's only one capability don't bother with threads.
-    driver 1 res kill = do
-      remaining <- atomically . newCTVar $ zip workitems ([0..] :: [Int])
-      currently <- atomically $ newCTVar []
-      liveworkers <- atomically $ newCTVar (1::Int)
-      atomically . putCTMVar kill $ failit res
-      explorer inorder remaining currently liveworkers res
+    driver [explorer] res _ ctids = do
+      atomically $ putCTMVar ctids []
+      explorer
       failit res
 
     -- Fork off as many threads as there are capabilities, and queue
     -- up the remaining work.
-    driver caps res kill = do
-      remaining <- atomically . newCTVar $ zip workitems ([0..] :: [Int])
-      currently <- atomically $ newCTVar []
-      liveworkers <- atomically $ newCTVar caps
-      tids <- mapM (\cap -> forkOn cap $ explorer inorder remaining currently liveworkers res) [1..caps]
+    driver explorers res liveworkers ctids = do
+      tids <- mapM (\(explorer, cap) -> forkOn cap explorer) $ zip explorers [0..]
 
       -- Construct an action to short-circuit the computation.
-      atomically . putCTMVar kill $ failit res >> mapM_ killThread tids
+      atomically $ putCTMVar ctids tids
 
       -- Block until there is a result, or every thread terminates,
       -- and then clean up.
@@ -308,43 +300,46 @@ work streaming inorder workitems = do
 -- is nothing left to do.
 explorer :: MonadConc m
          => Bool
-         -> CTVar (STMLike m) [(m (WorkItem m a), Int)]
-         -> CTVar (STMLike m) [Int]
-         -> CTVar (STMLike m) Int
-         -> Either (CTMVar (STMLike m) (Maybe a)) (Chan' (STMLike m) a a)
+         -> Bool
+         -> CTVar  (STMLike m) [(m (WorkItem m a), Int)]
+         -> (a -> b)
+         -> CTVar  (STMLike m) [Int]
+         -> CTVar  (STMLike m) Int
+         -> CTMVar (STMLike m) b
          -> m ()
-explorer inorder remaining currently liveworkers res = loop where
+explorer looping inorder workitems wf currently liveworkers var = loop where
   loop = do
     mitem <- atomically $ do
-      witem <- readCTVar remaining
+      witem <- readCTVar workitems
       case witem of
         (w@(_, idx):ws) -> do
-          writeCTVar remaining ws
+          writeCTVar workitems ws
           when inorder $ modifyCTVar' currently (idx:)
           return $ Just w
         [] -> return Nothing
 
     case mitem of
       Just (item, idx) -> do
-        -- If streaming, and the buffer is full, block.
-        atomically $ case res of
-          Right chn -> readCTVar (_remaining chn) >>= check . (/= 0)
-          _ -> return ()
-
         -- Compute the result
         fwrap  <- item
         maybea <- result fwrap
 
         case maybea of
           Just a -> do
-            -- If in order, block until there are no workers
-            -- processing an earlier work item.
-            when inorder . atomically $ readCTVar currently >>= check . all (>=idx)
+            atomically $ do
+              -- If in order, block until there are no workers
+              -- processing an earlier work item.
+              when inorder $ readCTVar currently >>= check . all (>=idx)
 
-            -- Store the result
-            case res of
-              Right chn -> atomically (writeChan' chn a >> tallyHo idx) >> loop
-              Left  var -> atomically $ putCTMVar var (Just a) >> tallyHo idx >> retire
+              -- Store the result and indicate it's done
+              putCTMVar var (wf a)
+              tallyHo idx
+
+              -- Retire the explorer if we're not looping
+              unless looping retire
+
+            -- If looping, loop.
+            when looping loop
           _ -> atomically (tallyHo idx) >> loop
       Nothing -> atomically retire
 
