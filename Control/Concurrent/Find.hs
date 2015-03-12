@@ -29,10 +29,15 @@ module Control.Concurrent.Find
   -- 'toMaybe' and 'toList'.
   , (.!), (.?), (>!), (>?)
   , first, inOrder, mappedFirst, mappedInOrder
+  -- * List Operations
+  , parMap, parFilter
+  , parAny, parAll
+  , parSeq, parForce
   ) where
 
 import Control.Applicative (Applicative(..), Alternative(..), (<$>))
 import Control.Concurrent.Find.Internal
+import Control.DeepSeq (NFData, deepseq, force)
 import Control.Monad (MonadPlus(..), void, liftM)
 import Control.Monad.Conc.Class (MonadConc, STMLike, atomically)
 import Data.Maybe (isJust, fromJust)
@@ -174,6 +179,8 @@ toMaybe = unsafePerformIO . runFind
 
 -- | Check if a computation has a result. This will block until a
 -- result is found.
+--
+-- This uses 'unsafePerformIO' internally.
 hasResult :: Find IO a -> Bool
 {-# NOINLINE hasResult #-}
 hasResult f = unsafePerformIO $ isJust `liftM` runFind f
@@ -395,3 +402,72 @@ merging f as = Find $ do
   stream <- as @? \a -> let o = f a in if o == mempty then Nothing else Just o
   o <- gatherStream stream
   workItem' $ Just o
+
+--------------------------------------------------------------------------------
+-- List operations
+
+-- | Lazy parallel 'map'. This evaluates elements to WHNF in parallel.
+parMap :: (a -> b) -> [a] -> [b]
+{-# NOINLINE [1] parMap #-}
+parMap f xs = toList . unsafePerformIO $ xs >? (\x -> x `seq` Just (f x))
+{-# RULES
+"map/map"    forall f g xs. parMap f (parMap    g xs) = parMap (f . g) xs
+"map/filter" forall f p xs. parMap f (parFilter p xs) = toList . unsafePerformIO $ xs >? bool p f
+"map/seq"    forall f xs.   parMap f (parSeq      xs) = parMap f xs
+"map/force"  forall f xs.   parMap f (parForce    xs) = parMap (\x -> x `deepseq` f x) xs
+ #-}
+
+-- | Lazy parallel 'filter'. This checks the predicate in parallel.
+parFilter :: (a -> Bool) -> [a] -> [a]
+{-# NOINLINE [1] parFilter #-}
+parFilter p xs = toList . unsafePerformIO $ xs >! p
+{-# RULES
+"filter/filter" forall p q xs. parFilter p (parFilter q xs) = parFilter (\x -> p x && q x) xs
+"filter/map"    forall f p xs. parFilter p (parMap    f xs) = toList . unsafePerformIO $ xs >? (\x -> x `seq` bool p id (f x))
+"filter/seq"    forall p xs.   parFilter p (parSeq      xs) = parFilter (\x -> x `seq`     p x) xs
+"filter/force"  forall p xs.   parFilter p (parForce    xs) = parFilter (\x -> x `deepseq` p x) xs
+ #-}
+
+-- | Lazy parallel 'any'. This checks the predicate in parallel.
+parAny :: (a -> Bool) -> [a] -> Bool
+{-# NOINLINE [1] parAny #-}
+parAny p xs = hasResult $ xs ! p
+{-# RULES
+"any/map"   forall f p xs. parAny p (parMap f xs) = hasResult $ xs ? (bool p id . f)
+"any/seq"   forall p xs.   parAny p (parSeq   xs) = parAny p xs
+"any/force" forall p xs.   parAny p (parForce xs) = parAny p xs
+ #-}
+
+-- | Lazy parallel 'all'. This checks the predicate in parallel.
+parAll :: (a -> Bool) -> [a] -> Bool
+{-# INLINE parAll #-}
+parAll p = parAny $ not . p
+
+-- | Evaluate each element of a list to weak-head normal form in
+-- parallel.
+parSeq :: [a] -> [a]
+{-# NOINLINE [1] parSeq #-}
+parSeq xs = toList . unsafePerformIO $ xs >! (`seq` True)
+{-# RULES
+"seq/seq"    forall xs.   parSeq (parSeq      xs) = parSeq xs
+"seq/force"  forall xs.   parSeq (parForce    xs) = parForce xs
+"seq/map"    forall f xs. parSeq (parMap    f xs) = parMap f xs
+"seq/filter" forall p xs. parSeq (parFilter p xs) = parFilter (\x -> x `seq` p x) xs
+ #-}
+
+-- | Evaluate each element of a list to normal form in parallel.
+parForce :: NFData a => [a] -> [a]
+{-# NOINLINE [1] parForce #-}
+parForce xs = toList . unsafePerformIO $ xs >! (`deepseq` True)
+{-# RULES
+"force/force"  forall xs.   parForce (parSeq    xs)   = parForce xs
+"force/seq"    forall xs.   parForce (parSeq    xs)   = parForce xs
+"force/map"    forall f xs. parForce (parMap    f xs) = parMap (force . f) xs
+"force/filter" forall p xs. parForce (parFilter p xs) = parFilter (\x -> x `deepseq` p x) xs
+ #-}
+
+-- | Helper function: check if a condition holds and, if so, transform
+-- the value.
+bool :: (a -> Bool) -> (a -> b) -> a -> Maybe b
+{-# INLINE bool #-}
+bool p f x = if p x then Just $ f x else Nothing
