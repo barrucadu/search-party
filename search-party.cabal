@@ -6,7 +6,7 @@ version:             0.0.0.0
 synopsis:            A library for parallel, non-deterministic, search.
 -- description:         
 homepage:            https://github.com/barrucadu/search-party
-license:             OtherLicense
+license:             MIT
 license-file:        LICENSE
 author:              Michael Walker
 maintainer:          mike@barrucadu.co.uk
