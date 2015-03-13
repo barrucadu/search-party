@@ -16,6 +16,15 @@ build-type:          Simple
 -- extra-source-files:  
 cabal-version:       >=1.10
 
+source-repository head
+  type:     git
+  location: https://github.com/barrucadu/search-party.git
+
+-- source-repository this
+--   type:     git
+--   location: https://github.com/barrucadu/search-party.git
+--   tag:      
+
 library
   exposed-modules:     Control.Concurrent.Find
   other-modules:       Control.Concurrent.Find.Internal
