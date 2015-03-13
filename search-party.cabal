@@ -24,7 +24,7 @@ library
   -- hs-source-dirs:      
   default-language:    Haskell2010
 
-  ghc-options:         -Wall -threaded
+  ghc-options:         -Wall
 
 test-suite tests
   hs-source-dirs:      tests
