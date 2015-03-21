@@ -39,9 +39,9 @@ import Control.Concurrent.Find.Internal
 import Control.DeepSeq (NFData, deepseq, force)
 import Control.Monad (MonadPlus(..), void, liftM)
 import Control.Monad.Conc.Class (MonadConc, STMLike, atomically)
+import Data.Foldable (Foldable)
 import Data.Maybe (isJust, fromJust)
 import Data.Monoid (Monoid(..), (<>), mempty)
-import Data.Traversable (Traversable)
 import System.IO.Unsafe (unsafePerformIO)
 
 import qualified Data.Foldable as F
@@ -298,16 +298,16 @@ failure :: MonadConc m => Find m a
 failure = fail ""
 
 -- | Return one non-failing result nondeterministically.
-oneOf :: (MonadConc m, Traversable t) => t (Find m a) -> Find m a
+oneOf :: (MonadConc m, Foldable t) => t (Find m a) -> Find m a
 oneOf as = case F.toList as of
   []  -> failure
   as' -> Find $ do
     Left (var, kill) <- work False False $ map unFind as'
     return $ workItem var id kill
 
--- | Return the first non-failing result in the traversal. This is
--- deterministic.
-firstOf :: (MonadConc m, Traversable t) => t (Find m a) -> Find m a
+-- | Return the first (in the toList of the 'Foldable') non-failing
+-- result. This is deterministic.
+firstOf :: (MonadConc m, Foldable t) => t (Find m a) -> Find m a
 firstOf as = case F.toList as of
   []  -> failure
   as' -> Find $ do
@@ -315,7 +315,7 @@ firstOf as = case F.toList as of
     return $ workItem var id kill
 
 -- | Return all non-failing results, the order is nondeterministic.
-allOf :: (MonadConc m, Traversable t) => t (Find m a) -> m (Stream m a)
+allOf :: (MonadConc m, Foldable t) => t (Find m a) -> m (Stream m a)
 allOf as = case F.toList as of
   []  -> Stream `liftM` atomically closedChan
   as' -> do
@@ -325,8 +325,8 @@ allOf as = case F.toList as of
     return $ Stream c
 
 -- | Return all non-failing results, in the order they appear in the
--- traversal. This is deterministic.
-orderedOf :: (MonadConc m, Traversable t) => t (Find m a) -> m (Stream m a)
+-- toList of the 'Foldable'. This is deterministic.
+orderedOf :: (MonadConc m, Foldable t) => t (Find m a) -> m (Stream m a)
 orderedOf as = case F.toList as of
   []  -> Stream `liftM` atomically closedChan
   as' -> do
@@ -337,79 +337,79 @@ orderedOf as = case F.toList as of
 -- Combinators
 
 -- | Flipped infix version of 'find'.
-(!) :: (MonadConc m, Traversable t) => t a -> (a -> Bool) -> Find m a
-as ! p = oneOf $ fmap (\a -> if p a then success a else failure) as
+(!) :: (MonadConc m, Foldable t) => t a -> (a -> Bool) -> Find m a
+as ! p = oneOf $ fomap (\a -> if p a then success a else failure) as
 
 -- | Return an element in the traversal matching the predicate.
-find :: (MonadConc m, Traversable t) => (a -> Bool) -> t a -> Find m a
+find :: (MonadConc m, Foldable t) => (a -> Bool) -> t a -> Find m a
 find = flip (!)
 
 -- | Flipped infix version of 'first'.
-(.!) :: (MonadConc m, Traversable t) => t a -> (a -> Bool) -> Find m a
-as .! p = firstOf $ fmap (\a -> if p a then success a else failure) as
+(.!) :: (MonadConc m, Foldable t) => t a -> (a -> Bool) -> Find m a
+as .! p = firstOf $ fomap (\a -> if p a then success a else failure) as
 
 -- | Variant of 'find' which returns the first such element.
-first :: (MonadConc m, Traversable t) => (a -> Bool) -> t a -> Find m a
+first :: (MonadConc m, Foldable t) => (a -> Bool) -> t a -> Find m a
 first = flip (.!)
 
 -- | Flipped infix version of 'mapped'.
-(?) :: (MonadConc m, Traversable t) => t a -> (a -> Maybe b) -> Find m b
-as ? f = oneOf $ fmap (maybe failure success . f) as
+(?) :: (MonadConc m, Foldable t) => t a -> (a -> Maybe b) -> Find m b
+as ? f = oneOf $ fomap (maybe failure success . f) as
 
 -- | Return an element in the traversal giving a 'Just'.
-mapped :: (MonadConc m, Traversable t) => (a -> Maybe b) -> t a -> Find m b
+mapped :: (MonadConc m, Foldable t) => (a -> Maybe b) -> t a -> Find m b
 mapped = flip (?)
 
 -- | Flipped infix version of 'mappedFirst'.
-(.?) :: (MonadConc m, Traversable t) => t a -> (a -> Maybe b) -> Find m b
-as .? f = firstOf $ fmap (maybe failure success . f) as
+(.?) :: (MonadConc m, Foldable t) => t a -> (a -> Maybe b) -> Find m b
+as .? f = firstOf $ fomap (maybe failure success . f) as
 
 -- | Variant of 'mapped' which returns the first such element.
-mappedFirst :: (MonadConc m, Traversable t) => (a -> Maybe b) -> t a -> Find m b
+mappedFirst :: (MonadConc m, Foldable t) => (a -> Maybe b) -> t a -> Find m b
 mappedFirst = flip (.?)
 
 -- | Flipped infix version of 'findAll'.
-(@!) :: (MonadConc m, Traversable t) => t a -> (a -> Bool) -> m (Stream m a)
-as @! p = allOf $ fmap (\a -> if p a then success a else failure) as
+(@!) :: (MonadConc m, Foldable t) => t a -> (a -> Bool) -> m (Stream m a)
+as @! p = allOf $ fomap (\a -> if p a then success a else failure) as
 
 -- | Variant of 'find' which returns all such elements.
-findAll :: (MonadConc m, Traversable t) => (a -> Bool) -> t a -> m (Stream m a)
+findAll :: (MonadConc m, Foldable t) => (a -> Bool) -> t a -> m (Stream m a)
 findAll = flip (@!)
 
 -- | Flipped infix version of 'inOrder'.
-(>!) :: (MonadConc m, Traversable t) => t a -> (a -> Bool) -> m (Stream m a)
-as >! p = orderedOf $ fmap (\a -> if p a then success a else failure) as
+(>!) :: (MonadConc m, Foldable t) => t a -> (a -> Bool) -> m (Stream m a)
+as >! p = orderedOf $ fomap (\a -> if p a then success a else failure) as
 
 -- | Variant of 'findAll' which returns the elements in the same order
 -- that they appear in the original traversal.
-inOrder :: (MonadConc m, Traversable t) => (a -> Bool) -> t a -> m (Stream m a)
+inOrder :: (MonadConc m, Foldable t) => (a -> Bool) -> t a -> m (Stream m a)
 inOrder = flip (>!)
 
 -- | Flipped infix version of 'mappedAll'.
-(@?) :: (MonadConc m, Traversable t) => t a -> (a -> Maybe b) -> m (Stream m b)
-as @? f = allOf $ fmap (maybe failure success . f) as
+(@?) :: (MonadConc m, Foldable t) => t a -> (a -> Maybe b) -> m (Stream m b)
+as @? f = allOf $ fomap (maybe failure success . f) as
 
 -- | Variant of 'mapped' which returns all such elements.
-mappedAll :: (MonadConc m, Traversable t) => (a -> Maybe b) -> t a -> m (Stream m b)
+mappedAll :: (MonadConc m, Foldable t) => (a -> Maybe b) -> t a -> m (Stream m b)
 mappedAll = flip (@?)
 
 -- | Flipped infix version of 'mappedInOrder'.
-(>?) :: (MonadConc m, Traversable t) => t a -> (a -> Maybe b) -> m (Stream m b)
-as >? f = orderedOf $ fmap (maybe failure success . f) as
+(>?) :: (MonadConc m, Foldable t) => t a -> (a -> Maybe b) -> m (Stream m b)
+as >? f = orderedOf $ fomap (maybe failure success . f) as
 
 -- | Variant of 'mappedAll' which returns the elements in the same
 -- order that they appear in the original traversal.
-mappedInOrder :: (MonadConc m, Traversable t) => (a -> Maybe b) -> t a -> m (Stream m b)
+mappedInOrder :: (MonadConc m, Foldable t) => (a -> Maybe b) -> t a -> m (Stream m b)
 mappedInOrder = flip (>?)
 
 -- | Find elements from a pair of traversables satisfying
 -- predicates. Both traversals are searched in parallel.
-both :: (MonadConc m, Traversable t) => (a -> Bool) -> (b -> Bool) -> t a -> t b -> Find m (a, b)
+both :: (MonadConc m, Foldable t) => (a -> Bool) -> (b -> Bool) -> t a -> t b -> Find m (a, b)
 both p q as bs = (,) <$> as ! p <*> bs ! q
 
 -- | Find an element from one of two traversables which satisfies a
 -- predicate. Both traversals are searched in parallel.
-either :: (MonadConc m, Traversable t) => (a -> Bool) -> (b -> Bool) -> t a -> t b -> Find m (Either a b)
+either :: (MonadConc m, Foldable t) => (a -> Bool) -> (b -> Bool) -> t a -> t b -> Find m (Either a b)
 either p q as bs = (Left <$> as ! p) <|> (Right <$> bs ! q)
 
 -- | Gather all non-failing results and 'mconcat' them together. The
@@ -420,7 +420,7 @@ either p q as bs = (Left <$> as ! p) <|> (Right <$> bs ! q)
 -- than
 --
 -- > fmap gatherStream $ xs @? Just . f
-merging :: (MonadConc m, Monoid o, Eq o, Traversable t) => (a -> o) -> t a -> Find m o
+merging :: (MonadConc m, Monoid o, Eq o, Foldable t) => (a -> o) -> t a -> Find m o
 merging f as = Find $ do
   stream <- as @? \a -> let o = f a in if o == mempty then Nothing else Just o
   o <- gatherStream stream
@@ -489,8 +489,14 @@ parForce xs = toList $ xs >! (`deepseq` True)
 "force/filter" forall p xs. parForce (parFilter p xs) = parFilter (\x -> x `deepseq` p x) xs
  #-}
 
--- | Helper function: check if a condition holds and, if so, transform
--- the value.
+--------------------------------------------------------------------------------
+-- Utilities
+
+-- | Turn a 'Foldable' into a list and map a function over it.
+fomap :: Foldable t => (a -> b) -> t a -> [b]
+fomap f = map f . F.toList
+
+-- | Check if a condition holds and, if so, transform the value.
 bool :: (a -> Bool) -> (a -> b) -> a -> Maybe b
 {-# INLINE bool #-}
 bool p f x = if p x then Just $ f x else Nothing
