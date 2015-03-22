@@ -25,6 +25,7 @@ module Control.Concurrent.Find.Internal
 
 import Control.Concurrent.STM.CTVar (modifyCTVar')
 import Control.Concurrent.STM.CTMVar
+import Control.DeepSeq (force)
 import Control.Monad (liftM, unless, when)
 import Control.Monad.Conc.Class
 import Control.Monad.STM.Class
