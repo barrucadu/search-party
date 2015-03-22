@@ -314,7 +314,7 @@ explorer looping inorder workitems wf currently liveworkers var = loop where
       case witem of
         (w@(_, idx):ws) -> do
           writeCTVar workitems ws
-          when inorder $ modifyCTVar' currently (idx:)
+          when inorder $ modifyCTVar' currently (\is -> force $ idx:is)
           return $ Just w
         [] -> return Nothing
 
