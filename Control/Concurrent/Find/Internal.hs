@@ -249,12 +249,12 @@ work streaming inorder workitems = do
     then do
       var <- newEmptyCTMVar
       chn <- newChan' var
-      let explorers = map (\_ -> explorer True inorder remaining id currently liveworkers var) [1..caps]
+      let explorers = map (\_ -> explorer True inorder caps remaining id currently liveworkers var) [1..caps]
       return (explorers, Right chn)
 
     else do
       var <- newEmptyCTMVar
-      let explorers = map (\_ -> explorer False inorder remaining Just currently liveworkers var) [1..caps]
+      let explorers = map (\_ -> explorer False inorder caps remaining Just currently liveworkers var) [1..caps]
       return (explorers, Left var)
 
   ctids <- atomically newEmptyCTMVar
@@ -302,50 +302,74 @@ work streaming inorder workitems = do
 explorer :: MonadConc m
          => Bool
          -> Bool
+         -> Int
          -> CTVar  (STMLike m) [(m (WorkItem m a), Int)]
          -> (a -> b)
-         -> CTVar  (STMLike m) [Int]
+         -> CTVar  (STMLike m) [(Int, Int)]
          -> CTVar  (STMLike m) Int
          -> CTMVar (STMLike m) b
          -> m ()
-explorer looping inorder workitems wf currently liveworkers var = loop where
-  loop = do
-    mitem <- atomically $ do
-      witem <- readCTVar workitems
-      case witem of
-        (w@(_, idx):ws) -> do
-          writeCTVar workitems ws
-          when inorder $ modifyCTVar' currently (\is -> force $ idx:is)
-          return $ Just w
-        [] -> return Nothing
+explorer looping inorder caps workitems wf currently liveworkers var = loop [] where
+  -- Claim some more work items atomically and then process them. This
+  -- is done rather than claim a single work item from the shared
+  -- queue every iteration to reduce contention, which drastically
+  -- improves performance with many threads.
+  --
+  -- As many items are claimed as there are workers, this has good
+  -- results in the one case I've tried it on, so let's hope it
+  -- generalises.
+  loop [] = do
+    items <- atomically $ do
+      witems <- readCTVar workitems
 
-    case mitem of
-      Just (item, idx) -> do
-        -- Compute the result
-        fwrap  <- item
-        maybea <- result fwrap
+      -- If there is only one capability, this is just needless
+      -- busywork, so claim everything.
+      if caps == 1
+      then return $ Just witems
+      else
+        case splitAt caps witems of
+          -- If there are no items, give up
+          ([], [])     -> return Nothing
 
-        case maybea of
-          Just a -> do
-            atomically $ do
-              -- If in order, block until there are no workers
-              -- processing an earlier work item.
-              when inorder $ readCTVar currently >>= check . all (>=idx)
+          -- Otherwise, write the remaining items back to the shared
+          -- queue and return the claimed ones.
+          (mine, rest) -> do
+            writeCTVar workitems rest
+            -- Indicate to all threads the range of work items we now
+            -- have, if producing results in order.
+            when inorder $ modifyCTVar'' currently (\is -> (snd $ head mine, snd $ last mine) : is)
+            return $ Just mine
 
-              -- Store the result and indicate it's done
-              putCTMVar var (wf a)
-              tallyHo idx
+    maybe (atomically retire) loop items
 
-              -- Retire the explorer if we're not looping
-              unless looping retire
+  loop ((item, idx):rest) = do
+    -- Compute the result
+    fwrap  <- item
+    maybea <- result fwrap
 
-            -- If looping, loop.
-            when looping loop
-          _ -> atomically (tallyHo idx) >> loop
-      Nothing -> atomically retire
+    case maybea of
+      Just a -> do
+        atomically $ do
+          -- If in order, block until there are no workers processing
+          -- an earlier work item.
+          when inorder $ readCTVar currently >>= check . all ((>=idx) . fst)
+
+          -- Store the result and indicate it's done
+          putCTMVar var (wf a)
+          when inorder $ unclaim idx
+
+          -- Retire the explorer if we're not looping
+          unless looping retire
+
+        -- If looping, loop.
+        when looping $ loop rest
+      _ -> atomically (when inorder $ unclaim idx) >> loop rest
 
   -- Record that the current work item is done.
-  tallyHo idx = when inorder . modifyCTVar' currently $ filter (/=idx)
+  unclaim idx = modifyCTVar'' currently $ map (\(l,h) -> if l == idx then (l+1,h) else (l,h)) . filter ((==idx) . snd)
 
   -- Record that the explorer is done.
   retire = modifyCTVar' liveworkers $ subtract 1
+
+  -- Really strict 'modifyTVar'
+  modifyCTVar'' ctvar = modifyCTVar' ctvar . force
