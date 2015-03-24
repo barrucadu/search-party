@@ -309,6 +309,19 @@ explorer :: MonadConc m
          -> CTVar  (STMLike m) Int
          -> CTMVar (STMLike m) b
          -> m ()
+-- If there is only one explorer, skip all the synchronisation stuff.
+explorer looping _ 1 workitems wf _ liveworkers var = do
+  work <- atomically (readCTVar workitems)
+  loop work
+  atomically $ writeCTVar liveworkers 0
+
+  where
+    loop ((item,_):rest) = item >>= result >>= maybe (loop rest) (\a -> do
+      atomically . putCTMVar var $ wf a
+      when looping $ loop rest)
+
+    loop [] = return ()
+
 explorer looping inorder caps workitems wf currently liveworkers var = loop [] where
   -- Claim some more work items atomically and then process them. This
   -- is done rather than claim a single work item from the shared
@@ -322,23 +335,18 @@ explorer looping inorder caps workitems wf currently liveworkers var = loop [] w
     items <- atomically $ do
       witems <- readCTVar workitems
 
-      -- If there is only one capability, this is just needless
-      -- busywork, so claim everything.
-      if caps == 1
-      then return $ Just witems
-      else
-        case splitAt caps witems of
-          -- If there are no items, give up
-          ([], [])     -> return Nothing
+      case splitAt caps witems of
+        -- If there are no items, give up
+        ([], [])     -> return Nothing
 
-          -- Otherwise, write the remaining items back to the shared
-          -- queue and return the claimed ones.
-          (mine, rest) -> do
-            writeCTVar workitems rest
-            -- Indicate to all threads the range of work items we now
-            -- have, if producing results in order.
-            when inorder $ modifyCTVar'' currently (\is -> (snd $ head mine, snd $ last mine) : is)
-            return $ Just mine
+        -- Otherwise, write the remaining items back to the shared
+        -- queue and return the claimed ones.
+        (mine, rest) -> do
+          writeCTVar workitems rest
+          -- Indicate to all threads the range of work items we now
+          -- have, if producing results in order.
+          when inorder $ modifyCTVar'' currently (\is -> (snd $ head mine, snd $ last mine) : is)
+          return $ Just mine
 
     maybe (atomically retire) loop items
 
