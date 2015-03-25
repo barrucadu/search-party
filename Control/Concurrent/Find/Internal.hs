@@ -322,20 +322,19 @@ explorer looping _ 1 workitems wf _ liveworkers var = do
 
     loop [] = return ()
 
-explorer looping inorder caps workitems wf currently liveworkers var = loop [] where
+explorer looping inorder caps workitems wf currently liveworkers var = loop ([1..caps] ++ repeat caps) [] where
   -- Claim some more work items atomically and then process them. This
   -- is done rather than claim a single work item from the shared
   -- queue every iteration to reduce contention, which drastically
   -- improves performance with many threads.
   --
-  -- As many items are claimed as there are workers, this has good
-  -- results in the one case I've tried it on, so let's hope it
-  -- generalises.
-  loop [] = do
+  -- 'n' items are claimed, where 'n' is 1..caps, starting at 1 and
+  -- incrementing each time.
+  loop (n:ns) [] = do
     items <- atomically $ do
       witems <- readCTVar workitems
 
-      case splitAt caps witems of
+      case splitAt n witems of
         -- If there are no items, give up
         ([], [])     -> return Nothing
 
@@ -348,9 +347,9 @@ explorer looping inorder caps workitems wf currently liveworkers var = loop [] w
           when inorder $ modifyCTVar'' currently (\is -> (snd $ head mine, snd $ last mine) : is)
           return $ Just mine
 
-    maybe (atomically retire) loop items
+    maybe (atomically retire) (loop ns) items
 
-  loop ((item, idx):rest) = do
+  loop n ((item, idx):rest) = do
     -- Compute the result
     fwrap  <- item
     maybea <- result fwrap
@@ -370,8 +369,8 @@ explorer looping inorder caps workitems wf currently liveworkers var = loop [] w
           unless looping retire
 
         -- If looping, loop.
-        when looping $ loop rest
-      _ -> atomically (when inorder $ unclaim idx) >> loop rest
+        when looping $ loop n rest
+      _ -> atomically (when inorder $ unclaim idx) >> loop n rest
 
   -- Record that the current work item is done.
   unclaim idx = modifyCTVar'' currently $ map (\(l,h) -> if l == idx then (l+1,h) else (l,h)) . filter ((==idx) . snd)
