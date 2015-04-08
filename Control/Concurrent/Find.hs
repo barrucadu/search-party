@@ -483,7 +483,7 @@ parForce :: NFData a => [a] -> [a]
 {-# NOINLINE [1] parForce #-}
 parForce xs = toList $ xs >! (`deepseq` True)
 {-# RULES
-"force/force"  forall xs.   parForce (parSeq    xs)   = parForce xs
+"force/force"  forall xs.   parForce (parForce  xs)   = parForce xs
 "force/seq"    forall xs.   parForce (parSeq    xs)   = parForce xs
 "force/map"    forall f xs. parForce (parMap    f xs) = parMap (force . f) xs
 "force/filter" forall p xs. parForce (parFilter p xs) = parFilter (\x -> x `deepseq` p x) xs
