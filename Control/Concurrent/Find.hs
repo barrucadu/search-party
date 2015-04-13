@@ -432,7 +432,7 @@ merging f as = Find $ do
 -- | Lazy parallel 'map'. This evaluates elements to WHNF in parallel.
 parMap :: (a -> b) -> [a] -> [b]
 {-# NOINLINE [1] parMap #-}
-parMap f xs = toList $ xs >? (\x -> x `seq` Just (f x))
+parMap f xs = toList $ xs >? (\x -> let x' = f x in x' `seq` Just x')
 {-# RULES
 "map/map"    forall f g xs. parMap f (parMap    g xs) = parMap (f . g) xs
 "map/filter" forall f p xs. parMap f (parFilter p xs) = toList $ xs >? bool p f
