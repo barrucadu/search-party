@@ -30,6 +30,7 @@ module Control.Concurrent.Find
   , first, inOrder, mappedFirst, mappedInOrder
   -- * List Operations
   , parMap, parFilter
+  , parConcatMap, parMapMaybe
   , parAny, parAll
   , parSeq, parForce
   ) where
@@ -438,6 +439,21 @@ parMap f xs = toList $ xs >? (\x -> x `seq` Just (f x))
 "map/filter" forall f p xs. parMap f (parFilter p xs) = toList $ xs >? bool p f
 "map/seq"    forall f xs.   parMap f (parSeq      xs) = parMap f xs
 "map/force"  forall f xs.   parMap f (parForce    xs) = parMap (\x -> x `deepseq` f x) xs
+ #-}
+
+-- | Parallel 'concatMap'. This evaluates results to WHNF in parallel,
+-- and should be preferred to @concat . parMap f@.
+parConcatMap :: (a -> [b]) -> [a] -> [b]
+{-# INLINE parConcatMap #-}
+parConcatMap f = concat . parMapMaybe go where
+  go x = let x' = f x in if null x' then Nothing else Just x'
+
+-- | Lazy parallel 'mapMaybe'. This evaluates results to WHNF in
+-- parallel.
+parMapMaybe :: (a -> Maybe b) -> [a] -> [b]
+parMapMaybe f xs = toList $ xs >? f
+{-# RULES
+"mapmaybe/mapmaybe" forall f g xs. parMapMaybe f (parMapMaybe g xs) = parMapMaybe (\x -> f x >>= g) xs
  #-}
 
 -- | Lazy parallel 'filter'. This checks the predicate in parallel.
