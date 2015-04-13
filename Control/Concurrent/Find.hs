@@ -32,7 +32,6 @@ module Control.Concurrent.Find
   , parMap, parFilter
   , parConcatMap, parMapMaybe
   , parAny, parAll
-  , parSeq, parForce
   ) where
 
 import Control.Applicative (Applicative(..), Alternative(..), (<$>))
@@ -437,8 +436,6 @@ parMap f xs = toList $ xs >? (\x -> x `seq` Just (f x))
 {-# RULES
 "map/map"    forall f g xs. parMap f (parMap    g xs) = parMap (f . g) xs
 "map/filter" forall f p xs. parMap f (parFilter p xs) = toList $ xs >? bool p f
-"map/seq"    forall f xs.   parMap f (parSeq      xs) = parMap f xs
-"map/force"  forall f xs.   parMap f (parForce    xs) = parMap (\x -> x `deepseq` f x) xs
  #-}
 
 -- | Parallel 'concatMap'. This evaluates results to WHNF in parallel,
@@ -463,8 +460,6 @@ parFilter p xs = toList $ xs >! p
 {-# RULES
 "filter/filter" forall p q xs. parFilter p (parFilter q xs) = parFilter (\x -> p x && q x) xs
 "filter/map"    forall f p xs. parFilter p (parMap    f xs) = toList $ xs >? (\x -> x `seq` bool p id (f x))
-"filter/seq"    forall p xs.   parFilter p (parSeq      xs) = parFilter (\x -> x `seq`     p x) xs
-"filter/force"  forall p xs.   parFilter p (parForce    xs) = parFilter (\x -> x `deepseq` p x) xs
  #-}
 
 -- | Lazy parallel 'any'. This checks the predicate in parallel.
@@ -473,37 +468,12 @@ parAny :: (a -> Bool) -> [a] -> Bool
 parAny p xs = hasResult $ xs ! p
 {-# RULES
 "any/map"   forall f p xs. parAny p (parMap f xs) = hasResult $ xs ? (bool p id . f)
-"any/seq"   forall p xs.   parAny p (parSeq   xs) = parAny p xs
-"any/force" forall p xs.   parAny p (parForce xs) = parAny p xs
  #-}
 
 -- | Lazy parallel 'all'. This checks the predicate in parallel.
 parAll :: (a -> Bool) -> [a] -> Bool
 {-# INLINE parAll #-}
 parAll p = parAny $ not . p
-
--- | Evaluate each element of a list to weak-head normal form in
--- parallel.
-parSeq :: [a] -> [a]
-{-# NOINLINE [1] parSeq #-}
-parSeq xs = toList $ xs >! (`seq` True)
-{-# RULES
-"seq/seq"    forall xs.   parSeq (parSeq      xs) = parSeq xs
-"seq/force"  forall xs.   parSeq (parForce    xs) = parForce xs
-"seq/map"    forall f xs. parSeq (parMap    f xs) = parMap f xs
-"seq/filter" forall p xs. parSeq (parFilter p xs) = parFilter (\x -> x `seq` p x) xs
- #-}
-
--- | Evaluate each element of a list to normal form in parallel.
-parForce :: NFData a => [a] -> [a]
-{-# NOINLINE [1] parForce #-}
-parForce xs = toList $ xs >! (`deepseq` True)
-{-# RULES
-"force/force"  forall xs.   parForce (parForce  xs)   = parForce xs
-"force/seq"    forall xs.   parForce (parSeq    xs)   = parForce xs
-"force/map"    forall f xs. parForce (parMap    f xs) = parMap (force . f) xs
-"force/filter" forall p xs. parForce (parFilter p xs) = parFilter (\x -> x `deepseq` p x) xs
- #-}
 
 --------------------------------------------------------------------------------
 -- Utilities
