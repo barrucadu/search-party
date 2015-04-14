@@ -473,7 +473,7 @@ parAny p xs = hasResult $ xs ! p
 -- | Lazy parallel 'all'. This checks the predicate in parallel.
 parAll :: (a -> Bool) -> [a] -> Bool
 {-# INLINE parAll #-}
-parAll p = parAny $ not . p
+parAll p = not . parAny (not . p)
 
 --------------------------------------------------------------------------------
 -- Utilities
