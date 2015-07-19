@@ -1,0 +1,9 @@
+flags: {}
+packages:
+- .
+- location:
+    git: https://github.com/barrucadu/dejafu.git
+    commit: HEAD
+    valid-wanted: false
+extra-deps: []
+resolver: nightly-2015-07-15
