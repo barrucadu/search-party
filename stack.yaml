@@ -6,4 +6,4 @@ packages:
     commit: HEAD
     valid-wanted: false
 extra-deps: []
-resolver: lts-2.20
+resolver: lts-3.0
