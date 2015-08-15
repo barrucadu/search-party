@@ -41,7 +41,7 @@ Bug reports, pull requests, and comments are very welcome!
 Feel free to contact me on GitHub, through IRC (#haskell on freenode),
 or email (mike@barrucadu.co.uk).
 
-[build-status]: http://ci.barrucadu.co.uk/job/search-party%20(lts)/badge/icon?style=plastic
-[build-log]:    http://ci.barrucadu.co.uk/job/search-party%20(lts)/
+[build-status]: http://ci.barrucadu.co.uk/job/(search-party)/job/search-party/badge/icon?style=plastic
+[build-log]:    http://ci.barrucadu.co.uk/job/(search-party)/job/search-party/
 [docs]:         https://barrucadu.github.io/search-party
 [dejafu]:       https://github.com/barrucadu/dejafu
