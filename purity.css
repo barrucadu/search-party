@@ -1,0 +1,1022 @@
+/*----------------------------------------------------------------------------*/
+/* Font imports                                                               */
+/*----------------------------------------------------------------------------*/
+
+@font-face {
+  font-family: "Open Sans";
+  font-style: normal;
+  font-weight: normal;
+  src: url("OpenSans-Regular.ttf") format("TrueType");
+}
+
+@font-face {
+  font-family: "Open Sans";
+  font-style: italic;
+  font-weight: normal;
+  src: url("OpenSans-Italic.ttf") format("TrueType");
+}
+
+@font-face {
+  font-family: "Open Sans";
+  font-style: normal;
+  font-weight: bold;
+  src: url("OpenSans-Bold.ttf") format("TrueType");
+}
+
+@font-face {
+  font-family: "Open Sans";
+  font-style: italic;
+  font-weight: bold;
+  src: url("OpenSans-BoldItalic.ttf") format("TrueType");
+}
+
+@font-face {
+  font-family: "FontAwesome";
+  font-style: normal;
+  font-weight: normal;
+  src: url("FontAwesome.ttf") format("TrueType");
+}
+
+@font-face {
+  font-family: "Haskell";
+  font-style: normal;
+  font-weight: normal;
+  src: url("Haskell.ttf") format("TrueType");
+}
+
+/*----------------------------------------------------------------------------*/
+/* Fundamentals                                                               */
+/*----------------------------------------------------------------------------*/
+
+* { margin: 0; padding: 0 }
+
+html {
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  background: #fff;
+  color: #222;
+  text-align: left;
+  min-height: 100%;
+  position: relative;
+}
+
+/*----------------------------------------------------------------------------*/
+
+.doc p {
+  margin-top: 15px;
+  margin-bottom: 15px;
+  text-align: justify;
+  hyphens: auto;
+}
+
+/*----------------------------------------------------------------------------*/
+
+ul, ol {
+  margin-top: 10px;
+  margin-bottom: 10px;
+  margin-left: 30px;
+}
+
+li {
+  margin-top: 5px;
+  margin-bottom: 5px;
+}
+
+/*----------------------------------------------------------------------------*/
+
+.doc ul, .doc il {
+  margin-top: 0;
+  margin-bottom: 0;
+  display: inline-block;
+}
+
+.doc ul > li {
+  list-style: none;
+  position: relative;
+}
+
+.doc ul > li:before {
+  content: "•";
+  position: absolute;
+  left: -0.75em;
+}
+
+/*----------------------------------------------------------------------------*/
+
+dl { margin: 0.8em 0; }
+
+dt { font-weight: bold; }
+
+dd { margin-left: 2em; }
+
+/*----------------------------------------------------------------------------*/
+
+a { text-decoration: none; }
+
+a[href]:link,
+#footer a:visited {
+  color: #428bca;
+  text-decoration: none
+}
+
+a[href]:visited { color: #992299; }
+
+a[href]:hover,
+a[href]:focus {
+  color: #2a6496;
+  text-decoration: underline;
+}
+
+a[href]:visited:hover,
+a[href]:visited:focus {
+  color: #661166;
+}
+
+a[href]:focus {
+  outline: 1px dotted;
+  outline-offset: 1px
+}
+
+/*----------------------------------------------------------------------------*/
+
+a[href].def:link,
+a[href].def:visited {
+  color: black;
+}
+
+a[href].def:hover {
+  color: rgb(78, 98, 114);
+}
+
+/*----------------------------------------------------------------------------*/
+/* Fonts and sizes                                                            */
+/*----------------------------------------------------------------------------*/
+
+body {
+  font-family: 'Open Sans', 'Liberation Sans', sans-serif;
+  font-size: 15px;
+}
+
+/*----------------------------------------------------------------------------*/
+
+h1,
+#synopsis .caption,
+#module-list .caption,
+#index .caption,
+#description .caption {
+  font-weight: normal;
+  font-size: 28px;
+}
+
+h1.module-name {
+  font-size: 32px;
+}
+
+h2,
+#table-of-contents .caption,
+#module-info .caption {
+  font-weight: normal;
+  font-size: 24px;
+}
+
+h3 {
+  font-size: 20px;
+  font-weight: bold;
+}
+
+h4,
+.instances .caption,
+.constructors .caption {
+  font-weight: bold;
+}
+
+h5 {
+  font-weight: bold;
+  font-style: italic;
+}
+
+/*----------------------------------------------------------------------------*/
+
+select, input, button, textarea {
+  font: 99% sans-serif;
+}
+
+table {
+  font-size: inherit;
+  font: 100%;
+}
+
+pre, code, kbd, samp, tt, .src {
+  font-family: 'Ubuntu Mono', 'Liberation Mono', monospace;
+}
+
+/*----------------------------------------------------------------------------*/
+
+#package-header, .info, #footer {
+  font-size: 90%;
+}
+
+/*----------------------------------------------------------------------------*/
+/* Common                                                                     */
+/*----------------------------------------------------------------------------*/
+
+.caption, h1, h2, h3 {
+  margin-top: 50px;
+  margin-bottom: 15px;
+}
+
+h4, h5, h6,
+.instances .caption,
+.constructors .caption {
+  margin-top: 20px;
+  margin-bottom: 15px;
+}
+
+h1 + h2, h2 + h3, h3 + h4, h4 + h5, h5 + h6 {
+  margin-top: inherit;
+}
+
+/*----------------------------------------------------------------------------*/
+
+ul.links {
+  list-style: none;
+  display: block;
+  margin: 0;
+  padding: 0;
+}
+
+ul.links li {
+  display: inline-block;
+  white-space: nowrap;
+  margin: 0;
+  padding: 0;
+}
+
+ul.links li a {
+  padding: 8px;
+}
+
+/*----------------------------------------------------------------------------*/
+
+.hide { display: none; }
+
+.show { display: inherit; }
+
+.clear { clear: both; }
+
+/*----------------------------------------------------------------------------*/
+/* Collapsers                                                                 */
+/*----------------------------------------------------------------------------*/
+
+.collapser:before { content: ""; }
+.expander:before { content: ""; }
+
+.collapser,
+.expander {
+  cursor: pointer;
+  position: relative;
+}
+
+.collapser:before,
+.expander:before {
+  font-family: 'FontAwesome';
+  display: inline-block;
+  font-size: 90%;
+  color: #777;
+  padding-right: 0.25em;
+}
+
+.collapser:hover:before,
+.expander:hover:before {
+  color: #222;
+}
+
+/*----------------------------------------------------------------------------*/
+/* Code and monospace text                                                    */
+/*----------------------------------------------------------------------------*/
+
+pre, code, tt {
+  color: #333;
+  hyphens: none;
+}
+
+pre, #synopsis > ul {
+  padding-left: 13px;
+  padding-right: 13px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  margin-top: 15px;
+  margin-bottom: 15px;
+  border-left: 6px solid #e5e5f6;
+  overflow: auto;
+  line-height: 140%;
+  background-color: #f3f3f9;
+  position: relative;
+}
+
+code, tt {
+  background: #f2f2f9;
+  padding: 2px 4px
+}
+
+pre code, pre tt {
+  background: transparent;
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+
+code.prompt {
+  display: none;
+}
+
+strong.userinput:before {
+  content: "λ ";
+  color: #8F4E8B;
+}
+
+/*----------------------------------------------------------------------------*/
+
+.src {
+  background: #f0f0f0;
+  padding: 5px 10px;
+}
+
+.top p.src {
+  border-top: 1px solid #ccc;
+  margin-top: 30px;
+  margin-bottom: 15px;
+}
+
+/*----------------------------------------------------------------------------*/
+
+.keyword { font-weight: normal; }
+
+.def { font-weight: bold; }
+
+/*----------------------------------------------------------------------------*/
+/* Page structure                                                             */
+/*----------------------------------------------------------------------------*/
+
+#content {
+  box-sizing: border-box;
+  margin-left: auto;
+  margin-right: auto;
+  padding-bottom: 120px;
+}
+
+/*----------------------------------------------------------------------------*/
+
+#package-header {
+  background: #352F44;
+  border-top: 6px solid #2c1e37;
+  color: #ddd;
+  padding: 5px;
+  padding-left: 30px;
+  padding-right: 30px;
+  position: relative;
+  text-align: left;
+}
+
+#package-header .caption {
+  display: block;
+  margin: 0;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#package-header p,
+#package-header a {
+  margin: 0;
+  padding: 0;
+  line-height: 30px;
+}
+
+#package-header .caption:before {
+  content: "";
+  font-family: Haskell;
+  color: #d1cddc;
+  font-weight: normal;
+  font-style: normal;
+  padding-right: 15px;
+  position: relative;
+}
+
+/*----------------------------------------------------------------------------*/
+
+#page-menu {
+  text-align: center;
+}
+
+#page-menu a {
+  text-decoration: none;
+  margin-left: 10px;
+  margin-right: 10px;
+}
+
+#page-menu a:link,
+#page-menu a:visited {
+  color: #d1cddc;
+}
+
+#page-menu > li a:hover {
+  color: #fff;
+}
+
+/*----------------------------------------------------------------------------*/
+/* Style menu                                                                 */
+/*----------------------------------------------------------------------------*/
+
+#style-menu-holder {
+  position: relative;
+  z-index: 2;
+  display: inline;
+}
+
+#style-menu-holder a.dropdown:after {
+  content: " ";
+  font-family: "FontAwesome";
+}
+
+#style-menu {
+  position: absolute;
+  z-index: 1;
+  overflow: visible;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+  margin: 0;
+  padding: 0;
+  text-align: center;
+  right: -1.5em;
+  top: 1.25em;
+}
+
+#style-menu ul {
+  margin: 0;
+}
+
+#style-menu li {
+  display: list-item;
+  margin: 0;
+  padding: 0;
+  list-style-type: none;
+}
+
+#style-menu a {
+  width: 6em;
+  margin: 0;
+  padding: 0.1em;
+  display: block;
+}
+
+#style-menu a:link,
+#style-menu a:visited {
+  color: #428bca;
+}
+
+#style-menu a:hover,
+#style-menu a:focus {
+  background: #428bca;
+  color: #f0f0f0;
+}
+
+/*----------------------------------------------------------------------------*/
+/* Footer                                                                     */
+/*----------------------------------------------------------------------------*/
+
+#footer {
+  background: #1B2332;
+  padding: 0.5em 0;
+  color: #f0f0f0;
+  position: absolute;
+  bottom: 0;
+  width: 100%;
+  overflow: hidden;
+  height: 60px;
+}
+
+#footer p {
+  text-align: center;
+  line-height: 60px;
+  margin: 0;
+}
+
+/*----------------------------------------------------------------------------*/
+/* Information table                                                          */
+/*----------------------------------------------------------------------------*/
+
+table.info {
+  border: none;
+  color: #444;
+  border-spacing: 0;
+  margin: 0;
+}
+
+.info td, .info th {
+  text-align: left;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  vertical-align: top;
+  line-height: 20px;
+}
+
+.info th {
+  color: #888;
+  line-height: 20px;
+}
+
+.info td {
+  padding-left: 30px;
+  white-space: pre-line;
+}
+
+/*----------------------------------------------------------------------------*/
+/* Synopsis                                                                   */
+/*----------------------------------------------------------------------------*/
+
+#synopsis ul ul {
+  overflow: hidden;
+  margin-left: 20px;
+}
+
+#synopsis ul,
+#synopsis ul li.src {
+  white-space: nowrap;
+  list-style: none;
+  margin-left: 0;
+}
+
+#synopsis ul li.src {
+  background: transparent;
+}
+
+#synopsis .collapser:before,
+#synopsis .expander:before {
+  font-size: 80%;
+}
+
+/*----------------------------------------------------------------------------*/
+/* Table of contents                                                          */
+/*----------------------------------------------------------------------------*/
+
+#table-of-contents ul {
+  list-style: none;
+  margin-left: 0;
+}
+
+#table-of-contents ul ul {
+  margin-left: 20px;
+}
+
+#table-of-contents li {
+  list-style: none;
+  margin-top: 8px;
+  margin-bottom: 8px;
+  font-size: 95%;
+}
+
+#table-of-contents li:last-child {
+  margin-bottom: 0;
+}
+
+#synopsis {
+  display: none;
+  clear: both;
+}
+
+.no-frame #synopsis {
+  display: block;
+  right: 0;
+  height: 80%;
+  top: 10%;
+}
+
+/*----------------------------------------------------------------------------*/
+/* Modules                                                                    */
+/*----------------------------------------------------------------------------*/
+
+#interface {
+  clear: both;
+}
+
+#interface div.top {
+  margin: 30px 0;
+}
+
+#interface h1 + div.top,
+#interface h2 + div.top,
+#interface h3 + div.top,
+#interface h4 + div.top,
+#interface h5 + div.top {
+   margin-top: 1em;
+}
+
+/*----------------------------------------------------------------------------*/
+
+#interface div.top > .doc,
+#interface div.top > .subs {
+  margin-left: 25px;
+}
+
+/*----------------------------------------------------------------------------*/
+
+#interface p.src .link,
+#interface td.src .link {
+  float: right;
+  color: #777;
+  border-left: 1px solid #bbb;
+  padding-left: 10px;
+  margin-left: 10px;
+}
+
+#interface span.fixity {
+  color: #777;
+  border-left: 1px solid #bbb;
+  padding-left: 10px;
+  margin-left: 10px;
+}
+
+#interface span.rightedge {
+  border-left: 1px solid #bbb;
+  margin-left: 10px;
+}
+
+#interface table {
+  border-spacing: 0px 4px;
+}
+
+#interface td.doc p {
+  margin: 0;
+}
+
+#interface td.doc p + p {
+  margin-top: 0.8em;
+}
+
+/*----------------------------------------------------------------------------*/
+
+.clearfix:after {
+  clear: both;
+  content: " ";
+  display: block;
+  height: 0;
+  visibility: hidden;
+}
+
+/*----------------------------------------------------------------------------*/
+/* Subs                                                                       */
+/*----------------------------------------------------------------------------*/
+
+
+.subs ul {
+  list-style: none;
+  display: table;
+  margin: 0;
+}
+
+.subs ul li {
+  display: table-row;
+}
+
+.subs ul li dfn {
+  display: table-cell;
+  font-style: normal;
+  font-weight: bold;
+  margin: 1px 0;
+  white-space: nowrap;
+}
+
+.subs ul li > .doc {
+  display: table-cell;
+  padding-left: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+.subs ul li > .doc p {
+  margin: 0;
+}
+
+/*----------------------------------------------------------------------------*/
+
+/* Render short-style data instances */
+.inst ul {
+  height: 100%;
+  padding: 0.5em;
+  margin: 0;
+}
+
+.inst, .inst li {
+  list-style: none;
+  margin-left: 1em;
+}
+
+/* Workaround for bug in Firefox (issue #384) */
+.inst-left {
+  float: left;
+}
+
+.subs {
+}
+
+/*----------------------------------------------------------------------------*/
+
+.warning {
+  color: red;
+}
+
+/*----------------------------------------------------------------------------*/
+
+.arguments .caption {
+  display: none;
+}
+
+/*----------------------------------------------------------------------------*/
+
+.fields { padding-left: 1em; }
+
+.fields .caption { display: none; }
+
+.fields p { margin: 0 0; }
+
+/*----------------------------------------------------------------------------*/
+/* Mini-pages                                                                 */
+/*----------------------------------------------------------------------------*/
+
+.extension-list {
+  list-style-type: none;
+  margin-left: 0;
+}
+
+/*----------------------------------------------------------------------------*/
+
+#mini {
+  margin: 0 auto;
+  padding: 0 1em 1em;
+}
+
+#mini > * {
+  font-size: 93%;
+}
+
+#mini #module-list .caption,
+#mini #module-header .caption {
+  font-size: 125%;
+}
+
+#mini #interface h1,
+#mini #interface h2,
+#mini #interface h3,
+#mini #interface h4 {
+  font-size: 109%;
+  margin: 1em 0 0;
+}
+
+#mini #interface .top,
+#mini #interface .src {
+  margin: 0;
+}
+
+#mini #module-list ul {
+  list-style: none;
+  margin: 0;
+}
+
+/*----------------------------------------------------------------------------*/
+/* Index                                                                      */
+/*----------------------------------------------------------------------------*/
+
+#alphabet ul {
+  list-style: none;
+  padding: 0;
+  margin: 0.5em 0 0;
+  text-align: center;
+}
+
+#alphabet li {
+  font-family: 'Ubuntu Mono', monospace;
+  display: inline-block;
+  margin: 0.25em;
+  font-size: 135%;
+}
+
+#alphabet a {
+  display: inline-block;
+  padding: 0.25em;
+  min-width: 1.6em;
+  font-weight: bold;
+  background: #f0f0f0;
+  color: #666;
+  padding-left: 6px;
+  padding-right: 6px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  border-bottom: 4px solid #ddd;
+  border-radius: 6px;
+}
+
+#alphabet a:hover {
+  text-decoration: none;
+  color: #222;
+}
+
+/*----------------------------------------------------------------------------*/
+
+#index table {
+  margin-left: 2em;
+}
+
+#index .src {
+  font-weight: bold;
+}
+
+#index .alt {
+  font-size: 77%;
+  font-style: italic;
+  padding-left: 2em;
+}
+
+#index td + td {
+  padding-left: 1em;
+}
+
+#index .no-items {
+  color: #999;
+  font-size: 36px;
+  text-align: center;
+  margin-top: 50px;
+}
+
+/*----------------------------------------------------------------------------*/
+/* Module list                                                                */
+/*----------------------------------------------------------------------------*/
+
+#module-list ul {
+  list-style: none;
+  margin: 0;
+}
+
+#module-list ul ul {
+  margin-left: 20px;
+}
+
+#module-list li {
+  clear: right;
+}
+
+#module-list li {
+  display: block;
+  margin: 0;
+  margin-top: 12px;
+  margin-bottom: 12px;
+}
+
+#module-list li span.module {
+  color: #555;
+}
+
+#module-list li span.short-descr {
+  font-size: 12px;
+  color: #777;
+}
+
+#module-list li span.short-descr:before {
+  content: "– ";
+}
+
+#module-list .package {
+  float: right;
+}
+
+/*----------------------------------------------------------------------------*/
+/* Wide screen support                                                        */
+/*----------------------------------------------------------------------------*/
+
+@media all and (max-width: 320px) {
+  #content {
+    margin-left: 10px;
+    margin-right: 10px;
+  }
+}
+
+@media all and (max-width: 740px) {
+  #content {
+    margin-left: 15px;
+    margin-right: 15px;
+  }
+}
+
+@media all and (min-width: 740px) {
+  #content {
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  #package-header {
+    display: flex;
+    flex-direction: row-reverse;
+  }
+
+  #package-header .caption {
+    flex-shrink: 1;
+    width: 100%;
+    text-align: left;
+  }
+
+  #page-menu {
+    flex-shrink: 0;
+  }
+}
+
+@media all and (min-width: 740px) and (max-width: 1200px) {
+  #content {
+    width: 100%;
+    max-width: 700px;
+  }
+
+  #sidebar {
+    display: flex;
+    width: 100%;
+  }
+
+  #module-info {
+    width: 100%;
+    flex-shrink: 1;
+  }
+
+  #table-of-contents {
+    width: 100%;
+    margin-left: 30px;
+    flex-shrink: 1;
+  }
+}
+
+@media all and (min-width: 800px) {
+  .collapser:before,
+  .expander:before {
+    padding-right: 0;
+    width: 0;
+    position: relative;
+    left: -1.1em;
+  }
+}
+
+@media all and (min-width: 1200px) {
+  #content.has-sidebar {
+    width: 1070px;
+    position: relative;
+    padding-right: 370px;
+  }
+
+  #content {
+    width: 700px;
+  }
+
+  #sidebar {
+    background: #f6f6f6;
+    padding: 15px;
+    width: 300px;
+    position: absolute;
+    right: 0;
+    top: 0;
+  }
+
+  #sidebar h1 {
+    font-size: 19px;
+  }
+
+  .info tr, .info th, .info td {
+    display: block;
+  }
+
+  .info th {
+    font-size: 12px;
+  }
+
+  .info td {
+    padding-left: 20px;
+  }
+
+  #description .caption {
+    display: none;
+  }
+
+  #table-of-contents,
+  #module-info {
+    padding-left: 15px;
+    padding-right: 15px;
+  }
+
+  #table-of-contents .caption,
+  #module-info .caption {
+    margin-top: 15px;
+    margin-bottom: 15px;
+    border: none;
+  }
+}
+
+/*----------------------------------------------------------------------------*/

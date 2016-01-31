@@ -482,7 +482,7 @@
 <a name="line-473"></a><a name="parAll"></a><span class='hs-comment'>-- | Lazy parallel 'all'. This checks the predicate in parallel.</span>
 <a name="line-474"></a><span class='hs-definition'>parAll</span> <span class='hs-keyglyph'>::</span> <span class='hs-layout'>(</span><span class='hs-varid'>a</span> <span class='hs-keyglyph'>-&gt;</span> <span class='hs-conid'>Bool</span><span class='hs-layout'>)</span> <span class='hs-keyglyph'>-&gt;</span> <span class='hs-keyglyph'>[</span><span class='hs-varid'>a</span><span class='hs-keyglyph'>]</span> <span class='hs-keyglyph'>-&gt;</span> <span class='hs-conid'>Bool</span>
 <a name="line-475"></a><span class='hs-comment'>{-# INLINE parAll #-}</span>
-<a name="line-476"></a><span class='hs-definition'>parAll</span> <span class='hs-varid'>p</span> <span class='hs-keyglyph'>=</span> <span class='hs-varid'>parAny</span> <span class='hs-varop'>$</span> <span class='hs-varid'>not</span> <span class='hs-varop'>.</span> <span class='hs-varid'>p</span>
+<a name="line-476"></a><span class='hs-definition'>parAll</span> <span class='hs-varid'>p</span> <span class='hs-keyglyph'>=</span> <span class='hs-varid'>not</span> <span class='hs-varop'>.</span> <span class='hs-varid'>parAny</span> <span class='hs-layout'>(</span><span class='hs-varid'>not</span> <span class='hs-varop'>.</span> <span class='hs-varid'>p</span><span class='hs-layout'>)</span>
 <a name="line-477"></a>
 <a name="line-478"></a><span class='hs-comment'>--------------------------------------------------------------------------------</span>
 <a name="line-479"></a><span class='hs-comment'>-- Utilities</span>

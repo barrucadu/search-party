@@ -295,7 +295,7 @@ function addStyleMenu() {
   }
   if (as.length > 1) {
     var h = "<div id='style-menu-holder'>"
-      + "<a href='#' onclick='styleMenu(); return false;'>Style &#9662;</a>"
+      + "<a class='dropdown' href='#' onclick='styleMenu(); return false;'>Style</a>"
       + "<ul id='style-menu' class='hide'>" + btns + "</ul>"
       + "</div>";
     addMenuItem(h);
