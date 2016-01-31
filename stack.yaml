@@ -1,9 +1,5 @@
 flags: {}
 packages:
 - .
-- location:
-    git: https://github.com/barrucadu/dejafu.git
-    commit: HEAD
-    valid-wanted: false
 extra-deps: []
-resolver: lts-3.0
+resolver: lts-4.2
