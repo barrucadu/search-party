@@ -38,7 +38,7 @@ import Control.Applicative (Applicative(..), Alternative(..), (<$>))
 import Control.Concurrent.Find.Internal
 import Control.DeepSeq (NFData, deepseq, force)
 import Control.Monad (MonadPlus(..), void, liftM)
-import Control.Monad.Conc.Class (MonadConc, STMLike, atomically)
+import Control.Monad.Conc.Class (MonadConc, STM, atomically)
 import Data.Foldable (Foldable)
 import Data.Maybe (isJust, fromJust)
 import Data.Monoid (Monoid(..), (<>), mempty)
@@ -60,7 +60,7 @@ newtype Find m a = Find { unFind :: m (WorkItem m a) }
 -- | A value of type @Stream m a@ represents a streaming sequence of
 -- results being computed concurrently in the 'MonadConc' monad @m@,
 -- which contains some values of type @a@.
-newtype Stream m a = Stream { unStream :: Chan (STMLike m) a }
+newtype Stream m a = Stream { unStream :: Chan (STM m) a }
 
 --------------------------------------------------------------------------------
 -- Instances

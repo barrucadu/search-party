@@ -23,8 +23,8 @@ module Control.Concurrent.Find.Internal
   , work
   ) where
 
-import Control.Concurrent.STM.CTVar (modifyCTVar')
-import Control.Concurrent.STM.CTMVar
+import Control.Concurrent.Classy.STM.TVar (modifyTVar')
+import Control.Concurrent.Classy.STM.TMVar
 import Control.DeepSeq (force)
 import Control.Monad (liftM, unless, when)
 import Control.Monad.Conc.Class
@@ -46,7 +46,7 @@ instance Functor (WorkItem m) where
 -- | A unit of work in a monad @m@ producing a result of type @x@,
 -- which will then be transformed into a value of type @a@.
 data WorkItem' m x a = WorkItem'
-  { _result :: CTMVar (STMLike m) (Maybe x)
+  { _result :: TMVar (STM m) (Maybe x)
   -- ^ The future result of the computation.
   , _mapped :: x -> a
   -- ^ Some post-processing to do.
@@ -62,7 +62,7 @@ data WorkState = StillComputing | HasFailed | HasSucceeded
   deriving (Eq)
 
 -- | Construct a 'WorkItem'.
-workItem :: CTMVar (STMLike m) (Maybe x) -> (x -> a) -> m () -> WorkItem m a
+workItem :: TMVar (STM m) (Maybe x) -> (x -> a) -> m () -> WorkItem m a
 workItem res mapp kill = wrap $ WorkItem' res mapp kill where
   -- Really not nice, but I have had difficulty getting GHC to unify
   -- @WorkItem' m x a@ with @forall x. WorkItem' m x a@
@@ -73,7 +73,7 @@ workItem res mapp kill = wrap $ WorkItem' res mapp kill where
 
 -- | Construct a 'WorkItem' containing a result.
 workItem' :: MonadConc m => Maybe a -> m (WorkItem m a)
-workItem' a = (\v -> workItem v id $ return ()) `liftM` atomically (newCTMVar a)
+workItem' a = (\v -> workItem v id $ return ()) `liftM` atomically (newTMVar a)
 
 --------------------------------------------------------------------------------
 -- Processing work items
@@ -100,7 +100,7 @@ blockOn fs = do
 -- present, so be careful not to lose parallelism.
 result :: MonadConc m => WorkItem m a -> m (Maybe a)
 result f = fmap (_mapped $ unWrap f) `liftM` res where
-  res = atomically . readCTMVar . _result $ unWrap f
+  res = atomically . readTMVar . _result $ unWrap f
 
 -- | Unsafe version of 'result', this will error at runtime if the
 -- computation fails.
@@ -108,9 +108,9 @@ unsafeResult :: MonadConc m => WorkItem m a -> m a
 unsafeResult = liftM fromJust . result
 
 -- | Get the current state of a work item.
-getState :: MonadConc m => WorkItem m a -> STMLike m WorkState
+getState :: MonadConc m => WorkItem m a -> STM m WorkState
 getState f = do
-  empty <- isEmptyCTMVar . _result $ unWrap f
+  empty <- isEmptyTMVar . _result $ unWrap f
   if empty
   then return StillComputing
   else do
@@ -119,12 +119,12 @@ getState f = do
 
 -- | Check if a work item has failed. If the computation has not
 -- terminated, this immediately returns 'False'.
-hasFailed :: MonadConc m => WorkItem m a -> STMLike m Bool
+hasFailed :: MonadConc m => WorkItem m a -> STM m Bool
 hasFailed f = do
-  working <- isEmptyCTMVar . _result $ unWrap f
+  working <- isEmptyTMVar . _result $ unWrap f
   if working
   then return False
-  else isNothing `liftM` readCTMVar (_result $ unWrap f)
+  else isNothing `liftM` readTMVar (_result $ unWrap f)
 
 --------------------------------------------------------------------------------
 -- Channels
@@ -146,11 +146,11 @@ data Chan' m x a
     }
 
   | Chan'
-    { _closed    :: CTVar m Bool
+    { _closed    :: TVar m Bool
     -- ^ Whether the channel has been closed or not.
-    , _var       :: CTMVar m x
+    , _var       :: TMVar m x
     -- ^ Output variable.
-    , _unget     :: CTVar m (Maybe x)
+    , _unget     :: TVar m (Maybe x)
     -- ^ Allows undoing a single read.
     , _cmapped   :: x -> a
     -- ^ The post-processing.
@@ -173,7 +173,7 @@ builderChan mx = chan $ BuilderChan' mx id
 -- | Construct a new closed 'Chan'.
 closedChan :: MonadSTM m => m (Chan m a)
 closedChan = do
-  empty <- newEmptyCTMVar
+  empty <- newEmptyTMVar
   c <- newChan' empty
   endChan' c
   return $ chan c
@@ -182,10 +182,10 @@ closedChan = do
 -- Processing channels
 
 -- | Create a new channel.
-newChan' :: MonadSTM m => CTMVar m x -> m (Chan' m x x)
+newChan' :: MonadSTM m => TMVar m x -> m (Chan' m x x)
 newChan' var = do
-  closed <- newCTVar False
-  unget  <- newCTVar Nothing
+  closed <- newTVar False
+  unget  <- newTVar Nothing
   return $ Chan' closed var unget id
 
 -- | Get the head of a channel, and an action to undo this read
@@ -197,22 +197,22 @@ readChan (Chan b@(BuilderChan' _ _)) = do
   item <- _builder b
   return $ (\x -> (_bmapped b x, return ())) `fmap` item
 readChan (Chan c) = do
-  ung <- readCTVar $ _unget c
+  ung <- readTVar $ _unget c
 
   case ung of
     -- First check if the last read was undone
     Just x  -> do
-      writeCTVar (_unget c) Nothing
-      return $ Just (_cmapped c x, writeCTVar (_unget c) ung)
+      writeTVar (_unget c) Nothing
+      return $ Just (_cmapped c x, writeTVar (_unget c) ung)
 
-    -- Then try to read from the CTMVars in turn
+    -- Then try to read from the TMVars in turn
     Nothing -> do
-      closed <- readCTVar     $ _closed c
-      res    <- tryTakeCTMVar $ _var c
+      closed <- readTVar     $ _closed c
+      res    <- tryTakeTMVar $ _var c
 
       case res of
         -- Return the value read
-        Just x -> return $ Just (_cmapped c x, writeCTVar (_unget c) res)
+        Just x -> return $ Just (_cmapped c x, writeTVar (_unget c) res)
 
         -- If not closed, block.
         Nothing -> check closed >> return Nothing
@@ -220,14 +220,14 @@ readChan (Chan c) = do
 -- | End a channel.
 endChan' :: MonadSTM m => Chan' m x a -> m ()
 endChan' (BuilderChan' _ _) = return ()
-endChan' c = writeCTVar (_closed c) True
+endChan' c = writeTVar (_closed c) True
 
 --------------------------------------------------------------------------------
 -- Work stealing
 
 -- | Push a batch of work to the queue.
 -- 
--- If streaming, return a channel, if not, return a 'CTMVar' that can
+-- If streaming, return a channel, if not, return a 'TMVar' that can
 -- be blocked on to get the result, and an action to kill the
 -- computation.
 --
@@ -235,31 +235,31 @@ endChan' c = writeCTVar (_closed c) True
 -- the work item list.
 
 work :: MonadConc m
-     => Bool -> Bool -> [m (WorkItem m a)] -> m (Either (CTMVar (STMLike m) (Maybe a), m ()) (Chan (STMLike m) a))
+     => Bool -> Bool -> [m (WorkItem m a)] -> m (Either (TMVar (STM m) (Maybe a), m ()) (Chan (STM m) a))
 work streaming inorder workitems = do
   caps <- getNumCapabilities
 
   -- Create the workers and the output variable(s)
-  liveworkers <- atomically $ newCTVar caps
+  liveworkers <- atomically $ newTVar caps
   (explorers, res) <- atomically $ do
-    remaining   <- newCTVar $ zip workitems [0..]
-    currently   <- newCTVar []
+    remaining   <- newTVar $ zip workitems [0..]
+    currently   <- newTVar []
 
     if streaming
     then do
-      var <- newEmptyCTMVar
+      var <- newEmptyTMVar
       chn <- newChan' var
       let explorers = map (\_ -> explorer True inorder caps remaining id currently liveworkers var) [1..caps]
       return (explorers, Right chn)
 
     else do
-      var <- newEmptyCTMVar
+      var <- newEmptyTMVar
       let explorers = map (\_ -> explorer False inorder caps remaining Just currently liveworkers var) [1..caps]
       return (explorers, Left var)
 
-  ctids <- atomically newEmptyCTMVar
+  ctids <- atomically newEmptyTMVar
   dtid  <- fork $ driver explorers res liveworkers ctids
-  ctids <- atomically $ readCTMVar ctids
+  ctids <- atomically $ readTMVar ctids
 
   return $ case res of
     Left  var -> Left  (var, mapM_ killThread ctids >> failit res >> killThread dtid)
@@ -268,7 +268,7 @@ work streaming inorder workitems = do
   where
     -- If there's only one capability don't bother with threads.
     driver [explorer] res _ ctids = do
-      atomically $ putCTMVar ctids []
+      atomically $ putTMVar ctids []
       explorer
       failit res
 
@@ -278,22 +278,22 @@ work streaming inorder workitems = do
       tids <- mapM (\(explorer, cap) -> forkOn cap explorer) $ zip explorers [0..]
 
       -- Construct an action to short-circuit the computation.
-      atomically $ putCTMVar ctids tids
+      atomically $ putTMVar ctids tids
 
       -- Block until there is a result, or every thread terminates,
       -- and then clean up.
       atomically $ do
         gotres <- case res of
-                   Left ctmvar -> tryReadCTMVar ctmvar
+                   Left tmvar -> tryReadTMVar tmvar
                    _ -> return Nothing
-        live <- readCTVar liveworkers
+        live <- readTVar liveworkers
         check $ live == 0 || isJust gotres
 
       failit res
       mapM_ killThread tids
 
     -- Record that a computation failed.
-    failit (Left  var) = atomically $ const () `liftM` tryPutCTMVar var Nothing
+    failit (Left  var) = atomically $ const () `liftM` tryPutTMVar var Nothing
     failit (Right chn) = atomically $ endChan' chn
 
 -- | A member of the search party, works through a queue of
@@ -303,21 +303,21 @@ explorer :: MonadConc m
          => Bool
          -> Bool
          -> Int
-         -> CTVar  (STMLike m) [(m (WorkItem m a), Int)]
+         -> TVar  (STM m) [(m (WorkItem m a), Int)]
          -> (a -> b)
-         -> CTVar  (STMLike m) [(Int, Int)]
-         -> CTVar  (STMLike m) Int
-         -> CTMVar (STMLike m) b
+         -> TVar  (STM m) [(Int, Int)]
+         -> TVar  (STM m) Int
+         -> TMVar (STM m) b
          -> m ()
 -- If there is only one explorer, skip all the synchronisation stuff.
 explorer looping _ 1 workitems wf _ liveworkers var = do
-  work <- atomically (readCTVar workitems)
+  work <- atomically (readTVar workitems)
   loop work
-  atomically $ writeCTVar liveworkers 0
+  atomically $ writeTVar liveworkers 0
 
   where
     loop ((item,_):rest) = item >>= result >>= maybe (loop rest) (\a -> do
-      atomically . putCTMVar var $ wf a
+      atomically . putTMVar var $ wf a
       when looping $ loop rest)
 
     loop [] = return ()
@@ -332,7 +332,7 @@ explorer looping inorder caps workitems wf currently liveworkers var = loop ([1.
   -- incrementing each time.
   loop (n:ns) [] = do
     items <- atomically $ do
-      witems <- readCTVar workitems
+      witems <- readTVar workitems
 
       case splitAt n witems of
         -- If there are no items, give up
@@ -341,10 +341,10 @@ explorer looping inorder caps workitems wf currently liveworkers var = loop ([1.
         -- Otherwise, write the remaining items back to the shared
         -- queue and return the claimed ones.
         (mine, rest) -> do
-          writeCTVar workitems rest
+          writeTVar workitems rest
           -- Indicate to all threads the range of work items we now
           -- have, if producing results in order.
-          when inorder $ modifyCTVar'' currently (\is -> (snd $ head mine, snd $ last mine) : is)
+          when inorder $ modifyTVar'' currently (\is -> (snd $ head mine, snd $ last mine) : is)
           return $ Just mine
 
     maybe (atomically retire) (loop ns) items
@@ -359,10 +359,10 @@ explorer looping inorder caps workitems wf currently liveworkers var = loop ([1.
         atomically $ do
           -- If in order, block until there are no workers processing
           -- an earlier work item.
-          when inorder $ readCTVar currently >>= check . all ((>=idx) . fst)
+          when inorder $ readTVar currently >>= check . all ((>=idx) . fst)
 
           -- Store the result and indicate it's done
-          putCTMVar var (wf a)
+          putTMVar var (wf a)
           when inorder $ unclaim idx
 
           -- Retire the explorer if we're not looping
@@ -373,10 +373,10 @@ explorer looping inorder caps workitems wf currently liveworkers var = loop ([1.
       _ -> atomically (when inorder $ unclaim idx) >> loop n rest
 
   -- Record that the current work item is done.
-  unclaim idx = modifyCTVar'' currently $ map (\(l,h) -> if l == idx then (l+1,h) else (l,h)) . filter ((==idx) . snd)
+  unclaim idx = modifyTVar'' currently $ map (\(l,h) -> if l == idx then (l+1,h) else (l,h)) . filter ((==idx) . snd)
 
   -- Record that the explorer is done.
-  retire = modifyCTVar' liveworkers $ subtract 1
+  retire = modifyTVar' liveworkers $ subtract 1
 
   -- Really strict 'modifyTVar'
-  modifyCTVar'' ctvar = modifyCTVar' ctvar . force
+  modifyTVar'' tvar = modifyTVar' tvar . force
